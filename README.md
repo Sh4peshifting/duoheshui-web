@@ -111,6 +111,16 @@ pnpm wrangler d1 migrations apply duoheshui --remote
 
 浏览器到 Worker 仍使用 HTTPS，但 **Worker 到 Tianji 的最后一段是明文 HTTP**。手机号、验证码和 device key 位于旧 DES 数据段；Tianji token 位于外层 `gptechMsg.header.token`，因此会在这段 HTTP 链路中以明文传输。该遗留协议存在被链路观察者截获和重放的风险，必须在上线前明确接受。浏览器绝不能直接请求旧 HTTP origin。
 
+### 上游 502 排查
+
+部署后，`tianji_request` 日志会给出不包含手机号、验证码、token 或请求正文的诊断字段：
+
+- `outcome=http_error`：Worker 已收到源站响应，结合 `upstreamStatus` 判断源站错误。
+- `outcome=timeout`：超过本项目设置的请求超时。
+- `outcome=network_error`：Cloudflare 到源站的连接失败；`failureKind` 会进一步标记 `connection_lost`、`connection_refused`、`dns` 等类别。
+
+配置已通过 `placement.hostname` 请求 Cloudflare 将 API 执行位置放到更接近 `newxiaotian.tianji-inc.com` 的节点。首次部署后需要等待平台完成位置探测。若日志持续显示 `connection_lost` 或 `connection_refused`，说明旧源站或其防火墙拒绝 Cloudflare 出口链路，无法仅靠重试安全解决（验证码请求可能已经送达）；此时应把 `TIANJI_USER_ORIGIN` / `TIANJI_IOT_ORIGIN` 指向受控的 HTTPS 中继服务。
+
 ## 真实账号 smoke test
 
 只能由账号及设备所有者执行，并按以下顺序进行：

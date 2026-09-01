@@ -3,6 +3,9 @@
   "name": "duoheshui-web",
   "main": "./src/worker/index.ts",
   "compatibility_date": "2026-08-28",
+  "placement": {
+    "hostname": "newxiaotian.tianji-inc.com"
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
