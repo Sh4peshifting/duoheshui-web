@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "duoheshui-web",
+  "main": "./src/worker/index.ts",
+  "compatibility_date": "2026-08-28",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "duoheshui",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "SEND_CODE_GLOBAL",
+      "namespace_id": "1001",
+      "simple": { "limit": 100, "period": 60 }
+    }
+  ],
+  "secrets": {
+    "required": [
+      "APP_DATA_KEY",
+      "TIANJI_DES_KEY",
+      "TIANJI_DES_IV",
+      "TIANJI_USER_ORIGIN",
+      "TIANJI_IOT_ORIGIN"
+    ]
+  }
+}

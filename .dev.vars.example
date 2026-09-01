@@ -1,0 +1,5 @@
+APP_DATA_KEY=<32-byte-base64url-key>
+TIANJI_DES_KEY=<8-byte-protocol-key>
+TIANJI_DES_IV=<8-byte-protocol-iv>
+TIANJI_USER_ORIGIN=https://newxiaotian.tianji-inc.com
+TIANJI_IOT_ORIGIN=https://iot.tianji-inc.com
