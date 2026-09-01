@@ -118,6 +118,7 @@ pnpm wrangler d1 migrations apply duoheshui --remote
 - `outcome=http_error`：Worker 已收到源站响应，结合 `upstreamStatus` 判断源站错误。
 - `outcome=timeout`：超过本项目设置的请求超时。
 - `outcome=network_error`：Cloudflare 到源站的连接失败；`failureKind` 会进一步标记 `connection_lost`、`connection_refused`、`dns` 等类别。
+- `tianji_business_response`：源站已返回 HTTP 200 后的业务判定，只记录脱敏后的 `businessCode`、`businessMessage` 与 `accepted`，不记录响应 `data`。只有明确的成功业务码或成功消息才会向网页报告短信已发送。
 
 配置已通过 `placement.hostname` 请求 Cloudflare 将 API 执行位置放到更接近 `newxiaotian.tianji-inc.com` 的节点。首次部署后需要等待平台完成位置探测。若日志持续显示 `connection_lost` 或 `connection_refused`，说明旧源站或其防火墙拒绝 Cloudflare 出口链路，无法仅靠重试安全解决（验证码请求可能已经送达）；此时应把 `TIANJI_USER_ORIGIN` / `TIANJI_IOT_ORIGIN` 指向受控的 HTTPS 中继服务。
 

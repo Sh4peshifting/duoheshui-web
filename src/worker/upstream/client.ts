@@ -9,6 +9,11 @@ interface TianjiUserPayload {
   wallet: { balance: string | number };
 }
 
+interface TianjiBusinessEnvelope {
+  code: string | number;
+  msg?: string;
+}
+
 class RetryableNetworkError extends AppError {}
 
 const ANDROID_USER_AGENT =
@@ -61,6 +66,48 @@ function describeFetchError(error: unknown): { errorName: string; failureKind: s
   return { errorName, failureKind, ...(errorMessage ? { errorMessage } : {}) };
 }
 
+function parseBusinessEnvelope(text: string): TianjiBusinessEnvelope {
+  try {
+    const value = JSON.parse(text) as Record<string, unknown>;
+    if (!value || typeof value !== "object" || (typeof value.code !== "string" && typeof value.code !== "number")) {
+      throw new UpstreamProtocolError();
+    }
+    if (value.msg !== undefined && typeof value.msg !== "string") throw new UpstreamProtocolError();
+    return { code: value.code, ...(value.msg === undefined ? {} : { msg: value.msg }) };
+  } catch (error) {
+    if (error instanceof UpstreamProtocolError) throw error;
+    throw new UpstreamProtocolError();
+  }
+}
+
+function sanitizeBusinessMessage(message: string | undefined): string | undefined {
+  if (!message) return undefined;
+  const sanitized = message
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b1\d{10}\b/g, "[mobile]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return sanitized || undefined;
+}
+
+function isSendCodeSuccess(envelope: TianjiBusinessEnvelope): boolean {
+  const message = envelope.msg ?? "";
+  if (/失败|错误|不正确|请输入|频繁|稍后|异常|限制|上限/.test(message)) return false;
+  if (/成功|已发送|发送完成/.test(message)) return true;
+  return String(envelope.code) === "0" || String(envelope.code) === "200";
+}
+
+function sendCodeRejection(message: string | undefined): AppError {
+  if (message && /频繁|稍后|限制|上限/.test(message)) {
+    return new AppError(429, "RATE_LIMITED", "验证码请求过于频繁，请稍后再试");
+  }
+  if (message && /手机号|手机号码/.test(message)) {
+    return new AppError(400, "UPSTREAM_REJECTED", "手机号未被上游服务接受");
+  }
+  return new AppError(400, "UPSTREAM_REJECTED", "上游服务未确认验证码已发送");
+}
+
 function stringBalance(value: unknown): string {
   if (typeof value !== "string" && typeof value !== "number") throw new UpstreamProtocolError();
   const balance = String(value);
@@ -106,9 +153,8 @@ export class TianjiUpstream implements Upstream {
       const response = await fetcher(upstreamUrl.toString(), {
         method: "POST",
         headers: {
-          "content-type": "application/x-www-form-urlencoded",
+          "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
           "accept-language": "zh-CN,zh;q=0.8",
-          "accept-encoding": "gzip",
           "cache-control": "no-cache",
           "user-agent": ANDROID_USER_AGENT,
         },
@@ -165,7 +211,16 @@ export class TianjiUpstream implements Upstream {
       "",
       8_000,
     );
-    try { JSON.parse(text); } catch { throw new UpstreamProtocolError(); }
+    const envelope = parseBusinessEnvelope(text);
+    const businessMessage = sanitizeBusinessMessage(envelope.msg);
+    console.info(JSON.stringify({
+      event: "tianji_business_response",
+      route: "/api/v1/UserApi/sendCode",
+      businessCode: String(envelope.code).slice(0, 32),
+      ...(businessMessage ? { businessMessage } : {}),
+      accepted: isSendCodeSuccess(envelope),
+    }));
+    if (!isSendCodeSuccess(envelope)) throw sendCodeRejection(businessMessage);
   }
 
   async login(mobile: string, code: string) {

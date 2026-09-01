@@ -18,7 +18,7 @@ describe("Tianji upstream transport", () => {
     let fetchReceiver: unknown = "not-called";
     const fetcher = vi.fn<typeof fetch>(async function (this: unknown) {
       fetchReceiver = this;
-      return new Response("{}", { status: 200 });
+      return new Response(JSON.stringify({ code: 0, msg: "发送成功" }), { status: 200 });
     });
     const upstream = new TianjiUpstream(
       env({ TIANJI_USER_ORIGIN: ' TIANJI_USER_ORIGIN="http://newxiaotian.tianji-inc.com/" ' }),
@@ -32,9 +32,9 @@ describe("Tianji upstream transport", () => {
     const [url, init] = fetcher.mock.calls[0]!;
     expect(url).toBe("http://newxiaotian.tianji-inc.com/api/v1/UserApi/sendCode");
     expect(init?.headers).toMatchObject({
-      "content-type": "application/x-www-form-urlencoded",
-      "accept-encoding": "gzip",
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
     });
+    expect(init?.headers).not.toHaveProperty("accept-encoding");
     expect((init?.headers as Record<string, string>)["user-agent"]).toContain("Android 11");
   });
 
@@ -67,5 +67,37 @@ describe("Tianji upstream transport", () => {
       failureKind: "connection_lost",
       errorMessage: "Network connection lost while fetching [url]",
     });
+  });
+
+  it("does not treat an HTTP 200 business rejection as a sent SMS", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ code: 100, msg: "请输入正确的手机号 13800138000", data: "secret" }), { status: 200 }),
+    );
+    const upstream = new TianjiUpstream(env(), fetcher);
+
+    await expect(upstream.sendCode("13800138000")).rejects.toMatchObject({
+      status: 400,
+      code: "UPSTREAM_REJECTED",
+      message: "手机号未被上游服务接受",
+    });
+
+    const businessLog = info.mock.calls
+      .map(([entry]) => JSON.parse(String(entry)) as Record<string, unknown>)
+      .find((entry) => entry.event === "tianji_business_response");
+    expect(businessLog).toMatchObject({
+      businessCode: "100",
+      businessMessage: "请输入正确的手机号 [mobile]",
+      accepted: false,
+    });
+    expect(JSON.stringify(businessLog)).not.toContain("secret");
+    expect(JSON.stringify(businessLog)).not.toContain("13800138000");
+  });
+
+  it("rejects an unrecognized HTTP 200 response instead of reporting success", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response("{}", { status: 200 }));
+    const upstream = new TianjiUpstream(env(), fetcher);
+
+    await expect(upstream.sendCode("13800138000")).rejects.toMatchObject({ code: "UPSTREAM_PROTOCOL_ERROR" });
   });
 });
