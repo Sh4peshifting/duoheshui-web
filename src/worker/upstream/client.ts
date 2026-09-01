@@ -99,7 +99,11 @@ export class TianjiUpstream implements Upstream {
     let outcome: RequestOutcome = "network_error";
     let failure: ReturnType<typeof describeFetchError> | undefined;
     try {
-      const response = await this.fetcher(upstreamUrl.toString(), {
+      // Cloudflare's global fetch rejects method-style invocation because it receives
+      // TianjiUpstream as its `this` value. Detach it before calling so this remains
+      // a normal Fetch API invocation while preserving dependency injection in tests.
+      const fetcher = this.fetcher;
+      const response = await fetcher(upstreamUrl.toString(), {
         method: "POST",
         headers: {
           "content-type": "application/x-www-form-urlencoded",

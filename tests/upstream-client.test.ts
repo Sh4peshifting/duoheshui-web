@@ -15,7 +15,11 @@ describe("Tianji upstream transport", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("normalizes dashboard-pasted origins and mirrors the legacy Android request headers", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => new Response("{}", { status: 200 }));
+    let fetchReceiver: unknown = "not-called";
+    const fetcher = vi.fn<typeof fetch>(async function (this: unknown) {
+      fetchReceiver = this;
+      return new Response("{}", { status: 200 });
+    });
     const upstream = new TianjiUpstream(
       env({ TIANJI_USER_ORIGIN: ' TIANJI_USER_ORIGIN="http://newxiaotian.tianji-inc.com/" ' }),
       fetcher,
@@ -24,6 +28,7 @@ describe("Tianji upstream transport", () => {
     await upstream.sendCode("13800138000");
 
     expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetchReceiver).toBeUndefined();
     const [url, init] = fetcher.mock.calls[0]!;
     expect(url).toBe("http://newxiaotian.tianji-inc.com/api/v1/UserApi/sendCode");
     expect(init?.headers).toMatchObject({
