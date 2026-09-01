@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "duoheshui",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "bfa117ae-410a-45c8-8c7c-31552cf65d56",
       "migrations_dir": "migrations"
     }
   ],
