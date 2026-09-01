@@ -2,7 +2,8 @@ import type { SessionRecord, Store } from "./types";
 import { AppError } from "./errors";
 
 const COOKIE_NAME = "duoheshui_session";
-export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+export const SESSION_TTL_SECONDS = 365 * 24 * 60 * 60;
+export const SESSION_TTL_MS = SESSION_TTL_SECONDS * 1_000;
 
 function toBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -19,7 +20,7 @@ export async function hashValue(value: string): Promise<string> {
 }
 
 export function sessionCookie(token: string): string {
-  return `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=604800`;
+  return `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_SECONDS}`;
 }
 
 export function clearSessionCookie(): string {

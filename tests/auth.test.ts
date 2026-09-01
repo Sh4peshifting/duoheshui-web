@@ -50,6 +50,7 @@ describe("authentication and account API", () => {
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("Secure");
     expect(setCookie).toContain("SameSite=Strict");
+    expect(setCookie).toContain("Max-Age=31536000");
     expect(await login.text()).not.toContain("server-only-token");
 
     const cookie = setCookie.split(";", 1)[0];

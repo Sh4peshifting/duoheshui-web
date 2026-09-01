@@ -7,7 +7,7 @@
 ## 已实现
 
 - 手机号 + 短信验证码登录，60 秒/小时双层短信限速。
-- 自有 HttpOnly、Secure、SameSite=Strict 会话；D1 仅保存 Session token 的 SHA-256。
+- 自有 HttpOnly、Secure、SameSite=Strict 会话，固定有效期 365 天；D1 仅保存 Session token 的 SHA-256。
 - 余额缓存与手动刷新；只有余额查询允许一次网络级重试。
 - 热水/冷水二维码分别关联，可相机扫描或手工粘贴。
 - 二维码在浏览器本地解码，画面不上传；API 不返回完整 device key。
@@ -72,48 +72,44 @@ pnpm build
 
 所有测试使用 mock 上游，不会发送真实短信或真实出水指令。
 
-## Cloudflare 部署
+## Cloudflare Dashboard + Git 部署
 
-1. 创建 D1，并把返回的数据库 UUID 写入 `wrangler.jsonc`：
+1. 把仓库推送到 GitHub 或 GitLab。不要提交 `.dev.vars`。
+2. 在 Cloudflare Dashboard 的 **Storage & Databases → D1 SQL Database** 中创建数据库 `duoheshui`，复制 Database ID，把 `wrangler.jsonc` 中的全零占位 UUID 替换为真实 ID 后推送。
+3. 将 `wrangler.jsonc` 中 `ratelimits[0].namespace_id` 改成当前 Cloudflare 账号内未使用的正整数标识。
+4. 在 **Workers & Pages → Create application → Start with Hello World** 创建一个名称严格为 `duoheshui-web` 的 Worker。
+5. 打开该 Worker 的 **Settings → Bindings → Add binding → D1 database**，变量名填写 `DB`，选择刚创建的 `duoheshui`。
+6. 在 **Settings → Variables and Secrets** 添加以下五个 Runtime Secret：
+   - `APP_DATA_KEY`：随机 32 字节 base64url。
+   - `TIANJI_DES_KEY`：Tianji 协议的 8 字节 key。
+   - `TIANJI_DES_IV`：Tianji 协议的 8 字节 IV。
+   - `TIANJI_USER_ORIGIN=http://newxiaotian.tianji-inc.com`
+   - `TIANJI_IOT_ORIGIN=http://iot.tianji-inc.com`
+7. 打开 D1 数据库的 **Console**，粘贴并执行 `migrations/0001_init.sql` 的完整内容。Migration 使用 `IF NOT EXISTS`，以后再通过 Wrangler 应用也不会重复建表失败。
+8. 回到 Worker 的 **Settings → Builds → Connect**，授权 GitHub/GitLab 并选择仓库。生产分支选择实际默认分支，项目根目录为 `/`。
+9. Build 配置：
+   - Build command：`pnpm build`
+   - Deploy command：`pnpm wrangler deploy`
+   - Build variable：`NODE_VERSION=22`
+   - Build variable：`PNPM_VERSION=11.19.0`
+   - 不要把五个 Runtime Secret 错放到 Build Variables 中。
+10. 保存并触发首次 Build。完成后访问 `https://duoheshui-web.<account>.workers.dev/api/health`，应返回 `{"ok":true,"data":{"status":"healthy"}}`。
+11. 在 **Domains** 中可继续绑定自己的域名。部署域名确定后，把 `index.html` 中的 Open Graph / X 图片改为该域名下 `/og.png` 的绝对 HTTPS URL并再次推送。
 
-   ```bash
-   pnpm wrangler d1 create duoheshui
-   ```
+如果选择命令行管理 migration，可在登录 Wrangler 后执行：
 
-2. 将 `ratelimits[].namespace_id` 改为 Cloudflare 账号内未使用的正整数标识。
-3. 应用远端 migration：
+```bash
+pnpm wrangler d1 migrations apply duoheshui --remote
+```
 
-   ```bash
-   pnpm wrangler d1 migrations apply duoheshui --remote
-   ```
+## 上游明文 HTTP 说明
 
-4. 逐项设置 Secrets（不要写入 `wrangler.jsonc`）：
+当前确认上游仅接受：
 
-   ```bash
-   pnpm wrangler secret put APP_DATA_KEY
-   pnpm wrangler secret put TIANJI_DES_KEY
-   pnpm wrangler secret put TIANJI_DES_IV
-   pnpm wrangler secret put TIANJI_USER_ORIGIN
-   pnpm wrangler secret put TIANJI_IOT_ORIGIN
-   ```
+- `http://newxiaotian.tianji-inc.com`
+- `http://iot.tianji-inc.com`
 
-5. 构建并部署：
-
-   ```bash
-   pnpm build
-   pnpm wrangler deploy
-   ```
-
-部署域名确定后，把 `index.html` 中的 Open Graph / X 图片地址改成该可信域名下 `/og.png` 的绝对 HTTPS URL。
-
-## 上游 TLS 说明
-
-实现默认请求：
-
-- `https://newxiaotian.tianji-inc.com`
-- `https://iot.tianji-inc.com`
-
-真实账号 smoke test 前必须确认 HTTPS 端点与旧 HTTP 端点响应一致。如果上游确实只接受 HTTP，可以通过 Secret 把 origin 改为 `http://...`；此时浏览器到 Worker 仍为 HTTPS，但 **Worker 到 Tianji 的最后一段是明文 HTTP**，应在上线风险评估中明确接受这一点。浏览器绝不能直接请求旧 HTTP origin。
+浏览器到 Worker 仍使用 HTTPS，但 **Worker 到 Tianji 的最后一段是明文 HTTP**。手机号、验证码、token 与 device key 虽然仍包在旧 DES 协议中，但 DES 不能替代现代 TLS；必须接受该遗留协议风险。浏览器绝不能直接请求旧 HTTP origin。
 
 ## 真实账号 smoke test
 

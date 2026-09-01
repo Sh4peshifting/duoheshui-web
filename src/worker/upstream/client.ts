@@ -23,8 +23,8 @@ export class TianjiUpstream implements Upstream {
   private readonly iotOrigin: string;
 
   constructor(private readonly env: Env, private readonly fetcher: typeof fetch = fetch) {
-    this.userOrigin = (env.TIANJI_USER_ORIGIN ?? "https://newxiaotian.tianji-inc.com").replace(/\/$/, "");
-    this.iotOrigin = (env.TIANJI_IOT_ORIGIN ?? "https://iot.tianji-inc.com").replace(/\/$/, "");
+    this.userOrigin = (env.TIANJI_USER_ORIGIN ?? "http://newxiaotian.tianji-inc.com").replace(/\/$/, "");
+    this.iotOrigin = (env.TIANJI_IOT_ORIGIN ?? "http://iot.tianji-inc.com").replace(/\/$/, "");
   }
 
   private async post(
