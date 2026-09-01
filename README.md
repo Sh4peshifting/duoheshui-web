@@ -109,7 +109,7 @@ pnpm wrangler d1 migrations apply duoheshui --remote
 - `http://newxiaotian.tianji-inc.com`
 - `http://iot.tianji-inc.com`
 
-浏览器到 Worker 仍使用 HTTPS，但 **Worker 到 Tianji 的最后一段是明文 HTTP**。手机号、验证码、token 与 device key 虽然仍包在旧 DES 协议中，但 DES 不能替代现代 TLS；必须接受该遗留协议风险。浏览器绝不能直接请求旧 HTTP origin。
+浏览器到 Worker 仍使用 HTTPS，但 **Worker 到 Tianji 的最后一段是明文 HTTP**。手机号、验证码和 device key 位于旧 DES 数据段；Tianji token 位于外层 `gptechMsg.header.token`，因此会在这段 HTTP 链路中以明文传输。该遗留协议存在被链路观察者截获和重放的风险，必须在上线前明确接受。浏览器绝不能直接请求旧 HTTP origin。
 
 ## 真实账号 smoke test
 
