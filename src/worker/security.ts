@@ -1,6 +1,8 @@
 import type { Context } from "hono";
 import { AppError } from "./errors";
 
+export const CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com; style-src 'self'; connect-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
 export function assertMutationRequest(c: Context): void {
   const origin = c.req.header("origin");
   const expected = new URL(c.req.url).origin;
@@ -16,6 +18,6 @@ export function applySecurityHeaders(response: Response): void {
   response.headers.set("x-frame-options", "DENY");
   response.headers.set(
     "content-security-policy",
-    "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    CONTENT_SECURITY_POLICY,
   );
 }
