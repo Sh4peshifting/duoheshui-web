@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/worker/app";
 import { AppError, UpstreamSessionInvalidError } from "../src/worker/errors";
+import { hashAccount, hashValue } from "../src/worker/session";
 import { createMockUpstream, MemoryStore } from "./api-test-helpers";
 
 const origin = "https://duoheshui.test";
@@ -109,6 +110,13 @@ describe("authentication and account API", () => {
     expect(response.status).toBe(401);
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
     expect(store.sessions.size).toBe(0);
+    expect(store.devices.size).toBe(1);
+
+    const relogin = await request("/api/auth/login/password", { mobile: "13800138000", password: "correct-password" });
+    const newCookie = relogin.headers.get("set-cookie")!.split(";", 1)[0];
+    const devices = await (await request("/api/devices", undefined, newCookie)).json() as any;
+    expect(devices.data.devices).toHaveLength(1);
+    expect(devices.data.devices[0]).toMatchObject({ label: "测试设备", enabled: true });
   });
 
   it("keeps the local session for an ordinary upstream network failure", async () => {
@@ -120,5 +128,36 @@ describe("authentication and account API", () => {
     expect(response.status).toBe(502);
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(store.sessions.size).toBe(1);
+  });
+
+  it("claims legacy session-owned devices for the stable account before validating user info", async () => {
+    const rawToken = "legacy-session-token";
+    const sidHash = await hashValue(rawToken);
+    store.sessions.set(sidHash, {
+      sidHash,
+      accountHash: sidHash,
+      mobile: "13800138000",
+      upstreamToken: "legacy-upstream-token",
+      balance: "1.00",
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + 60_000,
+    });
+    store.devices.set(`${sidHash}:legacy-device`, {
+      id: "legacy-device",
+      accountHash: sidHash,
+      label: "原有设备",
+      enabled: true,
+      hot: { deviceKey: "LEGACY-HOT", fingerprint: "******CY-HOT" },
+      cold: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const response = await request("/api/me", undefined, `duoheshui_session=${rawToken}`);
+    expect(response.status).toBe(200);
+    const accountHash = await hashAccount("13800138000");
+    expect(store.sessions.get(sidHash)?.accountHash).toBe(accountHash);
+    expect(await store.getDevice(accountHash, "legacy-device")).toMatchObject({ label: "原有设备", enabled: true });
   });
 });

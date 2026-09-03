@@ -21,31 +21,41 @@ export class MemoryStore implements Store {
   }
   async getSession(sidHash: string) { return this.sessions.get(sidHash) ?? null; }
   async putSession(record: SessionRecord) { this.sessions.set(record.sidHash, record); }
+  async bindSessionAccount(sidHash: string, accountHash: string) {
+    const session = this.sessions.get(sidHash);
+    if (session) this.sessions.set(sidHash, { ...session, accountHash });
+    const targetHasActive = [...this.devices.values()].some((device) => device.accountHash === accountHash && device.enabled);
+    for (const [key, device] of [...this.devices]) {
+      if (device.accountHash !== sidHash) continue;
+      this.devices.delete(key);
+      this.devices.set(`${accountHash}:${device.id}`, { ...device, accountHash, enabled: targetHasActive ? false : device.enabled });
+    }
+  }
   async deleteSession(sidHash: string) { this.sessions.delete(sidHash); }
   async updateBalance(sidHash: string, balance: string, updatedAt: number) {
     const value = this.sessions.get(sidHash);
     if (value) this.sessions.set(sidHash, { ...value, balance, updatedAt });
   }
-  async listDevices(sidHash: string) {
-    return [...this.devices.values()].filter((item) => item.sidHash === sidHash);
+  async listDevices(accountHash: string) {
+    return [...this.devices.values()].filter((item) => item.accountHash === accountHash);
   }
-  async getDevice(sidHash: string, id: string) { return this.devices.get(`${sidHash}:${id}`) ?? null; }
-  async getActiveDevice(sidHash: string) {
-    return [...this.devices.values()].find((item) => item.sidHash === sidHash && item.enabled) ?? null;
+  async getDevice(accountHash: string, id: string) { return this.devices.get(`${accountHash}:${id}`) ?? null; }
+  async getActiveDevice(accountHash: string) {
+    return [...this.devices.values()].find((item) => item.accountHash === accountHash && item.enabled) ?? null;
   }
-  async putDevice(record: DeviceRecord) { this.devices.set(`${record.sidHash}:${record.id}`, record); }
-  async deleteDevice(sidHash: string, id: string) {
-    const existing = await this.getDevice(sidHash, id);
-    this.devices.delete(`${sidHash}:${id}`);
+  async putDevice(record: DeviceRecord) { this.devices.set(`${record.accountHash}:${record.id}`, record); }
+  async deleteDevice(accountHash: string, id: string) {
+    const existing = await this.getDevice(accountHash, id);
+    this.devices.delete(`${accountHash}:${id}`);
     if (existing?.enabled) {
-      const next = [...this.devices.values()].find((item) => item.sidHash === sidHash);
-      if (next) this.devices.set(`${sidHash}:${next.id}`, { ...next, enabled: true });
+      const next = [...this.devices.values()].find((item) => item.accountHash === accountHash);
+      if (next) this.devices.set(`${accountHash}:${next.id}`, { ...next, enabled: true });
     }
   }
-  async setActiveDevice(sidHash: string, id: string) {
-    if (!(await this.getDevice(sidHash, id))) return false;
+  async setActiveDevice(accountHash: string, id: string) {
+    if (!(await this.getDevice(accountHash, id))) return false;
     for (const [key, device] of this.devices) {
-      if (device.sidHash === sidHash) this.devices.set(key, { ...device, enabled: device.id === id });
+      if (device.accountHash === accountHash) this.devices.set(key, { ...device, enabled: device.id === id });
     }
     return true;
   }

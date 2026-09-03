@@ -8,6 +8,7 @@ import {
   authenticate,
   clearSessionCookie,
   createSessionToken,
+  hashAccount,
   hashValue,
   maskMobile,
   readSessionToken,
@@ -119,6 +120,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     const timestamp = now();
     await storeFor(c.env).putSession({
       sidHash: await hashValue(token),
+      accountHash: await hashAccount(user.mobile),
       mobile: user.mobile,
       upstreamToken: user.token,
       balance: user.balance,
@@ -138,6 +140,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     const timestamp = now();
     await storeFor(c.env).putSession({
       sidHash: await hashValue(token),
+      accountHash: await hashAccount(user.mobile),
       mobile: user.mobile,
       upstreamToken: user.token,
       balance: user.balance,
@@ -184,7 +187,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.get("/api/devices", async (c) => {
     const store = storeFor(c.env);
     const session = await authenticate(store, c.req.header("cookie"), now());
-    const devices = await store.listDevices(session.sidHash);
+    const devices = await store.listDevices(session.accountHash);
     return c.json({ ok: true, data: { devices: devices.map(deviceView) } });
   });
 
@@ -196,9 +199,9 @@ export function createApp(dependencies: AppDependencies = {}) {
     const timestamp = now();
     const record = {
       id: crypto.randomUUID(),
-      sidHash: session.sidHash,
+      accountHash: session.accountHash,
       label: input.label,
-      enabled: (await store.listDevices(session.sidHash)).length === 0,
+      enabled: (await store.listDevices(session.accountHash)).length === 0,
       hot: input.hotKey ? { deviceKey: input.hotKey, fingerprint: fingerprint(input.hotKey) } : null,
       cold: input.coldKey ? { deviceKey: input.coldKey, fingerprint: fingerprint(input.coldKey) } : null,
       createdAt: timestamp,
@@ -214,7 +217,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     const session = await authenticate(store, c.req.header("cookie"), now());
     const id = parseDeviceId(c.req.param("id"));
     const input = await parseBody(c.req.raw, updateDeviceSchema, 8_192);
-    const existing = await store.getDevice(session.sidHash, id);
+    const existing = await store.getDevice(session.accountHash, id);
     if (!existing) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
     const hot = input.hotKey === undefined
       ? existing.hot
@@ -233,8 +236,8 @@ export function createApp(dependencies: AppDependencies = {}) {
     const store = storeFor(c.env);
     const session = await authenticate(store, c.req.header("cookie"), now());
     const id = parseDeviceId(c.req.param("id"));
-    if (!(await store.getDevice(session.sidHash, id))) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
-    await store.deleteDevice(session.sidHash, id);
+    if (!(await store.getDevice(session.accountHash, id))) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
+    await store.deleteDevice(session.accountHash, id);
     return c.json({ ok: true, data: { deleted: true } });
   });
 
@@ -243,7 +246,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     const store = storeFor(c.env);
     const session = await authenticate(store, c.req.header("cookie"), now());
     const id = parseDeviceId(c.req.param("id"));
-    if (!(await store.setActiveDevice(session.sidHash, id))) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
+    if (!(await store.setActiveDevice(session.accountHash, id))) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
     return c.json({ ok: true, data: { enabled: true } });
   });
 
@@ -265,7 +268,7 @@ export function createApp(dependencies: AppDependencies = {}) {
       const store = storeFor(c.env);
       const session = await authenticate(store, c.req.header("cookie"), now());
       const { requestId } = await parseBody(c.req.raw, commandSchema);
-      const device = await store.getActiveDevice(session.sidHash);
+      const device = await store.getActiveDevice(session.accountHash);
       const outlet = device?.[kind];
       if (!device || !outlet) throw new AppError(404, "DEVICE_NOT_FOUND", "当前设备尚未绑定对应出水口");
       const reservation = await store.reserveCommand(session.sidHash, requestId, kind, now());

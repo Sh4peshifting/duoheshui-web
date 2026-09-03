@@ -3,6 +3,7 @@ import type { DeviceKind, DeviceRecord, SessionRecord, Store } from "./types";
 
 type SessionRow = {
   sid_hash: string;
+  account_hash: string | null;
   mobile_enc: string;
   upstream_token_enc: string;
   balance: string | null;
@@ -13,7 +14,7 @@ type SessionRow = {
 
 type DeviceRow = {
   id: string;
-  sid_hash: string;
+  account_hash: string;
   label: string;
   enabled: number;
   hot_device_key_enc: string | null;
@@ -51,6 +52,7 @@ export class D1Store implements Store {
     if (!row) return null;
     return {
       sidHash: row.sid_hash,
+      accountHash: row.account_hash ?? row.sid_hash,
       mobile: await decryptField(row.mobile_enc, this.secret),
       upstreamToken: await decryptField(row.upstream_token_enc, this.secret),
       balance: row.balance,
@@ -62,9 +64,10 @@ export class D1Store implements Store {
 
   async putSession(record: SessionRecord): Promise<void> {
     await this.db.prepare(
-      "INSERT INTO sessions (sid_hash, mobile_enc, upstream_token_enc, balance, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO sessions (sid_hash, account_hash, mobile_enc, upstream_token_enc, balance, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).bind(
       record.sidHash,
+      record.accountHash,
       await encryptField(record.mobile, this.secret),
       await encryptField(record.upstreamToken, this.secret),
       record.balance,
@@ -72,6 +75,19 @@ export class D1Store implements Store {
       record.updatedAt,
       record.expiresAt,
     ).run();
+  }
+
+  async bindSessionAccount(sidHash: string, accountHash: string): Promise<void> {
+    await this.db.batch([
+      this.db.prepare("UPDATE sessions SET account_hash = ? WHERE sid_hash = ?").bind(accountHash, sidHash),
+      this.db.prepare(
+        `UPDATE saved_devices
+         SET enabled = 0
+         WHERE account_hash = ?
+           AND EXISTS (SELECT 1 FROM saved_devices WHERE account_hash = ? AND enabled = 1)`,
+      ).bind(sidHash, accountHash),
+      this.db.prepare("UPDATE saved_devices SET account_hash = ? WHERE account_hash = ?").bind(accountHash, sidHash),
+    ]);
   }
 
   async deleteSession(sidHash: string): Promise<void> {
@@ -85,7 +101,7 @@ export class D1Store implements Store {
   private async mapDevice(row: DeviceRow): Promise<DeviceRecord> {
     return {
       id: row.id,
-      sidHash: row.sid_hash,
+      accountHash: row.account_hash,
       label: row.label,
       enabled: row.enabled === 1,
       hot: row.hot_device_key_enc && row.hot_device_fingerprint
@@ -99,29 +115,29 @@ export class D1Store implements Store {
     };
   }
 
-  async listDevices(sidHash: string): Promise<DeviceRecord[]> {
+  async listDevices(accountHash: string): Promise<DeviceRecord[]> {
     const result = await this.db.prepare(
-      "SELECT * FROM saved_devices WHERE sid_hash = ? ORDER BY enabled DESC, created_at ASC",
-    ).bind(sidHash).all<DeviceRow>();
+      "SELECT * FROM saved_devices WHERE account_hash = ? ORDER BY enabled DESC, created_at ASC",
+    ).bind(accountHash).all<DeviceRow>();
     return Promise.all(result.results.map((row) => this.mapDevice(row)));
   }
 
-  async getDevice(sidHash: string, id: string): Promise<DeviceRecord | null> {
-    const row = await this.db.prepare("SELECT * FROM saved_devices WHERE sid_hash = ? AND id = ?").bind(sidHash, id).first<DeviceRow>();
+  async getDevice(accountHash: string, id: string): Promise<DeviceRecord | null> {
+    const row = await this.db.prepare("SELECT * FROM saved_devices WHERE account_hash = ? AND id = ?").bind(accountHash, id).first<DeviceRow>();
     return row ? this.mapDevice(row) : null;
   }
 
-  async getActiveDevice(sidHash: string): Promise<DeviceRecord | null> {
+  async getActiveDevice(accountHash: string): Promise<DeviceRecord | null> {
     const row = await this.db.prepare(
-      "SELECT * FROM saved_devices WHERE sid_hash = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
-    ).bind(sidHash).first<DeviceRow>();
+      "SELECT * FROM saved_devices WHERE account_hash = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
+    ).bind(accountHash).first<DeviceRow>();
     return row ? this.mapDevice(row) : null;
   }
 
   async putDevice(record: DeviceRecord): Promise<void> {
     await this.db.prepare(
       `INSERT INTO saved_devices (
-         id, sid_hash, label, enabled,
+         id, account_hash, label, enabled,
          hot_device_key_enc, hot_device_fingerprint,
          cold_device_key_enc, cold_device_fingerprint,
          created_at, updated_at
@@ -134,10 +150,10 @@ export class D1Store implements Store {
          cold_device_key_enc = excluded.cold_device_key_enc,
          cold_device_fingerprint = excluded.cold_device_fingerprint,
          updated_at = excluded.updated_at
-       WHERE saved_devices.sid_hash = excluded.sid_hash`,
+       WHERE saved_devices.account_hash = excluded.account_hash`,
     ).bind(
       record.id,
-      record.sidHash,
+      record.accountHash,
       record.label,
       record.enabled ? 1 : 0,
       record.hot ? await encryptField(record.hot.deviceKey, this.secret) : null,
@@ -149,25 +165,25 @@ export class D1Store implements Store {
     ).run();
   }
 
-  async deleteDevice(sidHash: string, id: string): Promise<void> {
-    const device = await this.getDevice(sidHash, id);
-    await this.db.prepare("DELETE FROM saved_devices WHERE sid_hash = ? AND id = ?").bind(sidHash, id).run();
+  async deleteDevice(accountHash: string, id: string): Promise<void> {
+    const device = await this.getDevice(accountHash, id);
+    await this.db.prepare("DELETE FROM saved_devices WHERE account_hash = ? AND id = ?").bind(accountHash, id).run();
     if (device?.enabled) {
       const next = await this.db.prepare(
-        "SELECT id FROM saved_devices WHERE sid_hash = ? ORDER BY created_at ASC LIMIT 1",
-      ).bind(sidHash).first<{ id: string }>();
-      if (next) await this.setActiveDevice(sidHash, next.id);
+        "SELECT id FROM saved_devices WHERE account_hash = ? ORDER BY created_at ASC LIMIT 1",
+      ).bind(accountHash).first<{ id: string }>();
+      if (next) await this.setActiveDevice(accountHash, next.id);
     }
   }
 
-  async setActiveDevice(sidHash: string, id: string): Promise<boolean> {
+  async setActiveDevice(accountHash: string, id: string): Promise<boolean> {
     const found = await this.db.prepare(
-      "SELECT 1 AS found FROM saved_devices WHERE sid_hash = ? AND id = ?",
-    ).bind(sidHash, id).first<{ found: number }>();
+      "SELECT 1 AS found FROM saved_devices WHERE account_hash = ? AND id = ?",
+    ).bind(accountHash, id).first<{ found: number }>();
     if (!found) return false;
     await this.db.batch([
-      this.db.prepare("UPDATE saved_devices SET enabled = 0 WHERE sid_hash = ?").bind(sidHash),
-      this.db.prepare("UPDATE saved_devices SET enabled = 1 WHERE sid_hash = ? AND id = ?").bind(sidHash, id),
+      this.db.prepare("UPDATE saved_devices SET enabled = 0 WHERE account_hash = ?").bind(accountHash),
+      this.db.prepare("UPDATE saved_devices SET enabled = 1 WHERE account_hash = ? AND id = ?").bind(accountHash, id),
     ]);
     return true;
   }

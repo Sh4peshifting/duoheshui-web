@@ -19,6 +19,10 @@ export async function hashValue(value: string): Promise<string> {
   return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))));
 }
 
+export function hashAccount(mobile: string): Promise<string> {
+  return hashValue(`account:${mobile}`);
+}
+
 export function sessionCookie(token: string): string {
   return `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_SECONDS}`;
 }
@@ -41,6 +45,11 @@ export async function authenticate(store: Store, cookieHeader: string | undefine
   if (!token) throw new AppError(401, "UNAUTHENTICATED", "请先登录");
   const session = await store.getSession(await hashValue(token));
   if (!session || session.expiresAt <= now) throw new AppError(401, "UNAUTHENTICATED", "登录状态已过期");
+  const accountHash = await hashAccount(session.mobile);
+  if (session.accountHash !== accountHash) {
+    await store.bindSessionAccount(session.sidHash, accountHash);
+    session.accountHash = accountHash;
+  }
   return session;
 }
 

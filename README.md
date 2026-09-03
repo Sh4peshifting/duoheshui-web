@@ -9,7 +9,7 @@
 - 支持手机号 + 账号密码或短信验证码登录，60 秒/小时双层短信限速；密码只用于本次上游登录请求，不落库。
 - 自有 HttpOnly、Secure、SameSite=Strict 会话，固定有效期 365 天；D1 仅保存 Session token 的 SHA-256。
 - 页面加载时通过用户信息接口验证上游凭据并刷新余额；余额也可手动刷新，只有余额查询允许一次网络级重试。
-- 用户信息、余额或出水响应明确表明 token 错误、失效或过期时，立即清除本地会话并返回登录页；普通网络故障不会触发注销。
+- 用户信息、余额或出水响应明确表明 token 错误、失效或过期时，立即清除本地会话并返回登录页；普通网络故障不会触发注销，重新登录后保存的设备仍然保留。
 - 支持保存多台常用饮水机；每台设备分别关联热水口和冷水口二维码，并可选择当前启用设备。
 - 二维码在浏览器本地解码，画面不上传；API 不返回完整 device key。
 - 支持临时设备扫码即解锁且不保存二维码；所有解锁无需二次确认，UUID 幂等、同类出水口三秒冷却且不自动重试。
@@ -88,7 +88,7 @@ pnpm build
    - `TIANJI_DES_IV`：Tianji 协议的 8 字节 IV。
    - `TIANJI_USER_ORIGIN=http://newxiaotian.tianji-inc.com`
    - `TIANJI_IOT_ORIGIN=http://iot.tianji-inc.com`
-7. 打开 D1 数据库的 **Console**，依次粘贴并执行 `migrations/0001_init.sql`、`migrations/0002_multi_device.sql` 的完整内容。第二个 migration 会把旧版账户已有的热/冷水绑定合并到一条默认启用的“原有设备”记录中。
+7. 打开 D1 数据库的 **Console**，依次粘贴并执行 `migrations/0001_init.sql`、`migrations/0002_multi_device.sql`、`migrations/0003_account_devices.sql` 的完整内容。第二个 migration 会把旧版账户已有的热/冷水绑定合并到一条默认启用的“原有设备”记录中；第三个 migration 让设备归属独立于会话，自动登出或重新登录不会删除设备。
 8. 回到 Worker 的 **Settings → Builds → Connect**，授权 GitHub/GitLab 并选择仓库。生产分支选择实际默认分支，项目根目录为 `/`。
 9. Build 配置：
    - Build command：`pnpm build`
@@ -105,7 +105,7 @@ pnpm build
 pnpm wrangler d1 migrations apply duoheshui --remote
 ```
 
-已有线上版本升级时，必须先对远程 D1 执行 `0002_multi_device.sql`，确认 migration 成功后再推送本次代码触发 Worker 部署；不要先部署查询 `saved_devices` 的新 Worker。
+已有线上版本升级时，必须先对远程 D1 执行尚未应用的 migration（本版本至少需要 `0003_account_devices.sql`），确认成功后再推送本次代码触发 Worker 部署；不要先部署读取 `account_hash` 的新 Worker。
 
 ## 上游明文 HTTP 说明
 
