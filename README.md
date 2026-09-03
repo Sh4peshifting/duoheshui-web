@@ -6,7 +6,7 @@
 
 ## 已实现
 
-- 支持手机号 + 账号密码或短信验证码登录，60 秒/小时双层短信限速；密码只用于本次上游登录请求，不落库。
+- 支持手机号 + 账号密码或短信验证码登录；登录和短信发送均由 Cloudflare Turnstile 服务端校验保护，短信另有 60 秒/小时双层限速；密码只用于本次上游登录请求，不落库。
 - 自有 HttpOnly、Secure、SameSite=Strict 会话，固定有效期 365 天；D1 仅保存 Session token 的 SHA-256。
 - 页面加载时通过用户信息接口验证上游凭据并刷新余额；余额也可手动刷新，只有余额查询允许一次网络级重试。
 - 用户信息、余额或出水响应明确表明 token 错误、失效或过期时，立即清除本地会话并返回登录页；普通网络故障不会触发注销，重新登录后保存的设备仍然保留。
@@ -25,6 +25,7 @@ Mobile Browser (HTTPS)
              ├─ D1 (encrypted sessions and device keys)
              ├─ Worker Secrets
              ├─ Rate Limiting binding
+             ├─ Cloudflare Turnstile Siteverify
              └─ Tianji adapter (DES-CBC / gptechMsg)
 ```
 
@@ -46,6 +47,7 @@ pnpm dev
 - `APP_DATA_KEY`：随机 32 字节的 base64url 字符串。
 - `TIANJI_DES_KEY` / `TIANJI_DES_IV`：旧 Android 协议兼容值，各 8 字节。
 - 两个 Tianji origin：按当前已确认的上游能力填写下文列出的 HTTP 地址。
+- `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`：示例中使用 Cloudflare 官方测试密钥，仅限本地开发；生产环境必须替换成自己的真实密钥。
 
 可以用 Node.js 生成 `APP_DATA_KEY`：
 
@@ -67,6 +69,7 @@ pnpm build
 
 - 三组固定 DES-CBC 向量的双向一致性。
 - gptechMsg 字段、每次生成新 `msg_id`、只进行一次 form encoding。
+- Turnstile Siteverify 的成功、失败、重复令牌、上下文不匹配及服务不可用处理。
 - 验证码发送、验证码/密码登录失败与成功、Session Cookie、加载时用户信息验证及余额刷新。
 - 用户信息缺失、`auth=00001` 和 token 失效消息的自动注销处理。
 - 多设备增删改、当前设备切换、旧热/冷水绑定迁移与完整 device key 不回传。
@@ -82,22 +85,25 @@ pnpm build
 3. 将 `wrangler.jsonc` 中 `ratelimits[0].namespace_id` 改成当前 Cloudflare 账号内未使用的正整数标识。
 4. 在 **Workers & Pages → Create application → Start with Hello World** 创建一个名称严格为 `duoheshui-web` 的 Worker。
 5. 打开该 Worker 的 **Settings → Bindings → Add binding → D1 database**，变量名填写 `DB`，选择刚创建的 `duoheshui`。
-6. 在 **Settings → Variables and Secrets** 添加以下五个 Runtime Secret：
+6. 在 Cloudflare Dashboard 的 **Turnstile → Add widget** 创建一个 **Managed** 小组件，把 Worker 的 `*.workers.dev` 完整主机名以及实际自定义域名加入 Hostname Management，保存后复制 Site key 与 Secret key。
+7. 在 Worker 的 **Settings → Variables and Secrets** 添加以下七个 Runtime Secret：
    - `APP_DATA_KEY`：随机 32 字节 base64url。
    - `TIANJI_DES_KEY`：Tianji 协议的 8 字节 key。
    - `TIANJI_DES_IV`：Tianji 协议的 8 字节 IV。
    - `TIANJI_USER_ORIGIN=http://newxiaotian.tianji-inc.com`
    - `TIANJI_IOT_ORIGIN=http://iot.tianji-inc.com`
-7. 打开 D1 数据库的 **Console**，依次粘贴并执行 `migrations/0001_init.sql`、`migrations/0002_multi_device.sql`、`migrations/0003_account_devices.sql` 的完整内容。第二个 migration 会把旧版账户已有的热/冷水绑定合并到一条默认启用的“原有设备”记录中；第三个 migration 让设备归属独立于会话，自动登出或重新登录不会删除设备。
-8. 回到 Worker 的 **Settings → Builds → Connect**，授权 GitHub/GitLab 并选择仓库。生产分支选择实际默认分支，项目根目录为 `/`。
-9. Build 配置：
+   - `TURNSTILE_SITE_KEY`：上一步获得的公开 Site key；代码只通过 `/api/config` 将此值提供给登录页。
+   - `TURNSTILE_SECRET_KEY`：上一步获得的 Secret key；仅用于 Worker 请求 Siteverify，绝不能提交到 Git 或发送给浏览器。
+8. 打开 D1 数据库的 **Console**，依次粘贴并执行 `migrations/0001_init.sql`、`migrations/0002_multi_device.sql`、`migrations/0003_account_devices.sql` 的完整内容。第二个 migration 会把旧版账户已有的热/冷水绑定合并到一条默认启用的“原有设备”记录中；第三个 migration 让设备归属独立于会话，自动登出或重新登录不会删除设备。
+9. 回到 Worker 的 **Settings → Builds → Connect**，授权 GitHub/GitLab 并选择仓库。生产分支选择实际默认分支，项目根目录为 `/`。
+10. Build 配置：
    - Build command：`pnpm build`
    - Deploy command：`pnpm wrangler deploy`
    - Build variable：`NODE_VERSION=22`
    - Build variable：`PNPM_VERSION=11.19.0`
-   - 不要把五个 Runtime Secret 错放到 Build Variables 中。
-10. 保存并触发首次 Build。完成后访问 `https://duoheshui-web.<account>.workers.dev/api/health`，应返回 `{"ok":true,"data":{"status":"healthy"}}`。
-11. 在 **Domains** 中可继续绑定自己的域名。部署域名确定后，把 `index.html` 中的 Open Graph / X 图片改为该域名下 `/og.png` 的绝对 HTTPS URL并再次推送。
+   - 不要把七个 Runtime Secret 错放到 Build Variables 中。
+11. 保存并触发首次 Build。完成后访问 `https://duoheshui-web.<account>.workers.dev/api/health`，应返回 `{"ok":true,"data":{"status":"healthy"}}`；再打开登录页确认 Turnstile 正常显示。
+12. 在 **Domains** 中可继续绑定自己的域名。新增或更换域名时，也要把新主机名加入 Turnstile 的 Hostname Management。部署域名确定后，把 `index.html` 中的 Open Graph / X 图片改为该域名下 `/og.png` 的绝对 HTTPS URL并再次推送。
 
 如果选择命令行管理 migration，可在登录 Wrangler 后执行：
 
@@ -145,6 +151,7 @@ POST   /api/auth/send-code
 POST   /api/auth/login
 POST   /api/auth/login/password
 POST   /api/auth/logout
+GET    /api/config
 GET    /api/me
 POST   /api/balance/refresh
 GET    /api/devices

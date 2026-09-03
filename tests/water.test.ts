@@ -19,16 +19,19 @@ describe("device and water APIs", () => {
   });
 
   async function api(path: string, method: string, body?: unknown, useCookie = true) {
-    const app = createApp({ store, upstream, now: () => now });
+    const requestBody = path === "/api/auth/login" && body && typeof body === "object"
+      ? { turnstileToken: "valid-turnstile-token", ...body }
+      : body;
+    const app = createApp({ store, upstream, now: () => now, verifyTurnstile: async () => undefined });
     return app.request(`${origin}${path}`, {
       method,
       headers: {
         origin,
         "x-duoheshui-client": "web",
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...(requestBody === undefined ? {} : { "content-type": "application/json" }),
         ...(useCookie && cookie ? { cookie } : {}),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: requestBody === undefined ? undefined : JSON.stringify(requestBody),
     });
   }
 

@@ -68,9 +68,10 @@ const body = (value: unknown) => JSON.stringify(value);
 
 export const api = {
   me: () => request<AccountData>("/api/me"),
-  sendCode: (mobile: string) => request<{ sent: true; retryAfter: number }>("/api/auth/send-code", { method: "POST", body: body({ mobile }) }),
-  login: (mobile: string, code: string) => request<AccountData>("/api/auth/login", { method: "POST", body: body({ mobile, code }) }),
-  loginWithPassword: (mobile: string, password: string) => request<AccountData>("/api/auth/login/password", { method: "POST", body: body({ mobile, password }) }),
+  config: () => request<{ turnstileSiteKey: string }>("/api/config"),
+  sendCode: (mobile: string, turnstileToken: string) => request<{ sent: true; retryAfter: number }>("/api/auth/send-code", { method: "POST", body: body({ mobile, turnstileToken }) }),
+  login: (mobile: string, code: string, turnstileToken: string) => request<AccountData>("/api/auth/login", { method: "POST", body: body({ mobile, code, turnstileToken }) }),
+  loginWithPassword: (mobile: string, password: string, turnstileToken: string) => request<AccountData>("/api/auth/login/password", { method: "POST", body: body({ mobile, password, turnstileToken }) }),
   logout: () => request<AccountData>("/api/auth/logout", { method: "POST", body: body({}) }),
   refreshBalance: () => request<{ balance: string }>("/api/balance/refresh", { method: "POST", body: body({}) }),
   devices: () => request<DevicesData>("/api/devices"),

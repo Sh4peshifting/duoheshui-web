@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api, isSessionExpiredError, onSessionExpired, type AccountData, type DeviceInput, type DeviceKind, type DevicesData, type DeviceView } from "./api";
+import { TurnstileWidget } from "./TurnstileWidget";
 
 const emptyDevices: DevicesData = { devices: [] };
 type Notice = { type: "success" | "error"; text: string } | null;
@@ -145,6 +146,29 @@ function LoginScreen({ initialMessage, onLogin }: { initialMessage: string; onLo
   const [countdown, setCountdown] = useState(0);
   const [busy, setBusy] = useState<"send" | "login" | null>(null);
   const [error, setError] = useState(initialMessage);
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileError, setTurnstileError] = useState("");
+  const [turnstileVersion, setTurnstileVersion] = useState(0);
+
+  const acceptTurnstileToken = useCallback((token: string) => {
+    setTurnstileToken(token);
+    if (token) setTurnstileError("");
+  }, []);
+  const reportTurnstileError = useCallback(() => {
+    setTurnstileToken("");
+    setTurnstileError("人机验证加载失败，请刷新页面重试");
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api.config().then(({ turnstileSiteKey: siteKey }) => {
+      if (active) setTurnstileSiteKey(siteKey);
+    }).catch((caught) => {
+      if (active) setTurnstileError(caught instanceof Error ? caught.message : "人机验证加载失败，请刷新页面重试");
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (countdown <= 0) return;
@@ -155,10 +179,11 @@ function LoginScreen({ initialMessage, onLogin }: { initialMessage: string; onLo
   async function sendCode() {
     setError("");
     if (!/^1[3-9]\d{9}$/.test(mobile)) return setError("请输入有效的中国大陆手机号");
+    if (!turnstileToken) return setError("请先完成人机验证");
     setBusy("send");
-    try { const result = await api.sendCode(mobile); setSent(true); setCountdown(result.retryAfter); }
+    try { const result = await api.sendCode(mobile, turnstileToken); setSent(true); setCountdown(result.retryAfter); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "验证码发送失败，请稍后再试"); }
-    finally { setBusy(null); }
+    finally { setBusy(null); setTurnstileToken(""); setTurnstileVersion((value) => value + 1); }
   }
 
   async function login(event: FormEvent) {
@@ -166,13 +191,14 @@ function LoginScreen({ initialMessage, onLogin }: { initialMessage: string; onLo
     if (!/^1[3-9]\d{9}$/.test(mobile)) return setError("请输入有效的中国大陆手机号");
     if (mode === "code" && !/^\d{4,8}$/.test(code)) return setError("请输入收到的短信验证码");
     if (mode === "password" && (!password || password.length > 128)) return setError("请输入账号密码");
+    if (!turnstileToken) return setError("请先完成人机验证");
     setBusy("login");
     try {
-      onLogin(mode === "password" ? await api.loginWithPassword(mobile, password) : await api.login(mobile, code));
+      onLogin(mode === "password" ? await api.loginWithPassword(mobile, password, turnstileToken) : await api.login(mobile, code, turnstileToken));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "登录失败，请检查登录信息");
     }
-    finally { setBusy(null); }
+    finally { setBusy(null); setTurnstileToken(""); setTurnstileVersion((value) => value + 1); }
   }
 
   function changeMode(next: LoginMode) {
@@ -195,12 +221,13 @@ function LoginScreen({ initialMessage, onLogin }: { initialMessage: string; onLo
           <div className="phone-field"><span>+86</span><input id="mobile" inputMode="tel" autoComplete="tel" value={mobile} onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 11))} placeholder="请输入手机号" disabled={busy !== null} /></div>
           {mode === "password" && <><label htmlFor="password">密码</label><input id="password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value.slice(0, 128))} placeholder="请输入账号密码" disabled={busy !== null} /></>}
           {mode === "code" && sent && <><label htmlFor="code">验证码</label><input id="code" className="code-input" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="请输入短信验证码" disabled={busy !== null} autoFocus /></>}
-          {error && <p className="form-error" role="alert"><CircleAlert size={16} />{error}</p>}
+          {turnstileSiteKey ? <TurnstileWidget key={turnstileVersion} siteKey={turnstileSiteKey} onToken={acceptTurnstileToken} onError={reportTurnstileError} /> : !turnstileError && <div className="turnstile-placeholder"><LoaderCircle className="spin" size={17} />正在加载人机验证</div>}
+          {(error || turnstileError) && <p className="form-error" role="alert"><CircleAlert size={16} />{error || turnstileError}</p>}
           {mode === "password" ? (
-            <button type="submit" className="primary-action" disabled={busy !== null || !mobile || !password}>{busy === "login" ? <><LoaderCircle className="spin" size={18} />正在登录</> : <>登录<ChevronRight size={18} /></>}</button>
+            <button type="submit" className="primary-action" disabled={busy !== null || !mobile || !password || !turnstileToken}>{busy === "login" ? <><LoaderCircle className="spin" size={18} />正在登录</> : <>登录<ChevronRight size={18} /></>}</button>
           ) : !sent ? (
-            <button type="button" className="primary-action" onClick={sendCode} disabled={busy !== null}>{busy === "send" ? <><LoaderCircle className="spin" size={18} />正在发送</> : <>获取验证码<ChevronRight size={18} /></>}</button>
-          ) : <><button type="submit" className="primary-action" disabled={busy !== null || !code}>{busy === "login" ? <><LoaderCircle className="spin" size={18} />正在登录</> : <>登录<ChevronRight size={18} /></>}</button><button type="button" className="text-action" onClick={sendCode} disabled={countdown > 0 || busy !== null}>{countdown > 0 ? `${countdown} 秒后可重新发送` : "重新发送验证码"}</button></>}
+            <button type="button" className="primary-action" onClick={sendCode} disabled={busy !== null || !turnstileToken}>{busy === "send" ? <><LoaderCircle className="spin" size={18} />正在发送</> : <>获取验证码<ChevronRight size={18} /></>}</button>
+          ) : <><button type="submit" className="primary-action" disabled={busy !== null || !code || !turnstileToken}>{busy === "login" ? <><LoaderCircle className="spin" size={18} />正在登录</> : <>登录<ChevronRight size={18} /></>}</button><button type="button" className="text-action" onClick={sendCode} disabled={countdown > 0 || busy !== null || !turnstileToken}>{countdown > 0 ? `${countdown} 秒后可重新发送` : "重新发送验证码"}</button></>}
         </form>
         <p className="login-hint">建议使用密码登录；短信验证码频繁请求可能触发上游限制。</p>
         <p className="privacy-note"><ShieldCheck size={16} />登录凭据仅由安全服务器处理</p>
@@ -296,7 +323,7 @@ function DevicesPage({ devices, onAdd, onEdit, onChanged, onNotice }: {
 
   return (
     <div className="devices-page">
-      <div className="page-heading"><div><span className="section-kicker">我的设备</span><h1>常用饮水机</h1></div><button className="add-action" onClick={onAdd} aria-label="添加设备"><Plus size={18} />添加设备</button></div>
+      <div className="page-heading"><div><span className="section-kicker">我的设备</span><h1>常用饮水机</h1></div><button className="add-action" onClick={onAdd} aria-label="添加设备"><Plus size={18} /><span>添加设备</span></button></div>
       {devices.length === 0 ? (
         <section className="empty-state"><Smartphone size={36} /><h2>还没有保存设备</h2><p>添加常用饮水机后，即可从首页快速解锁。</p><button className="primary-action" onClick={onAdd}><Plus size={18} />添加第一台设备</button></section>
       ) : (

@@ -33,7 +33,9 @@
       "TIANJI_DES_KEY",
       "TIANJI_DES_IV",
       "TIANJI_USER_ORIGIN",
-      "TIANJI_IOT_ORIGIN"
+      "TIANJI_IOT_ORIGIN",
+      "TURNSTILE_SITE_KEY",
+      "TURNSTILE_SECRET_KEY"
     ]
   }
 }

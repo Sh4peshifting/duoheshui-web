@@ -58,4 +58,5 @@ export interface AppDependencies {
   store?: Store;
   upstream?: Upstream;
   now?: () => number;
+  verifyTurnstile?: (token: string, remoteIp: string | undefined, expectedHostname: string) => Promise<void>;
 }

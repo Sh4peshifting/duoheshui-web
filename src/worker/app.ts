@@ -15,12 +15,14 @@ import {
   sessionCookie,
 } from "./session";
 import type { AppDependencies, DeviceRecord, Env, Store, Upstream } from "./types";
+import { verifyTurnstile } from "./turnstile";
 import { TianjiUpstream } from "./upstream/client";
 
 const mobileSchema = z.string().regex(/^1[3-9]\d{9}$/);
-const loginSchema = z.object({ mobile: mobileSchema, code: z.string().regex(/^\d{4,8}$/) }).strict();
-const passwordLoginSchema = z.object({ mobile: mobileSchema, password: z.string().min(1).max(128) }).strict();
-const sendCodeSchema = z.object({ mobile: mobileSchema }).strict();
+const turnstileTokenSchema = z.string().trim().min(1).max(2048);
+const loginSchema = z.object({ mobile: mobileSchema, code: z.string().regex(/^\d{4,8}$/), turnstileToken: turnstileTokenSchema }).strict();
+const passwordLoginSchema = z.object({ mobile: mobileSchema, password: z.string().min(1).max(128), turnstileToken: turnstileTokenSchema }).strict();
+const sendCodeSchema = z.object({ mobile: mobileSchema, turnstileToken: turnstileTokenSchema }).strict();
 const deviceKeySchema = z.string().trim().min(1).max(2048);
 const deviceLabelSchema = z.string().trim().min(1).max(64);
 const createDeviceSchema = z.object({
@@ -74,6 +76,10 @@ export function createApp(dependencies: AppDependencies = {}) {
   const now = dependencies.now ?? Date.now;
   const storeFor = (env: Env): Store => dependencies.store ?? new D1Store(env.DB, env.APP_DATA_KEY);
   const upstreamFor = (env: Env): Upstream => dependencies.upstream ?? new TianjiUpstream(env);
+  const verifyHuman = (env: Env, token: string, remoteIp: string | undefined, hostname: string) => (
+    dependencies.verifyTurnstile?.(token, remoteIp, hostname)
+    ?? verifyTurnstile(env.TURNSTILE_SECRET_KEY, token, remoteIp, hostname)
+  );
 
   app.use("*", async (c, next) => {
     if (c.req.path.startsWith("/api/")) await storeFor(c.env).cleanup(now());
@@ -102,9 +108,16 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.get("/api/health", (c) => c.json({ ok: true, data: { status: "healthy" } }));
 
+  app.get("/api/config", (c) => {
+    if (!c.env.TURNSTILE_SITE_KEY) throw new AppError(503, "TURNSTILE_NOT_CONFIGURED", "人机验证尚未配置");
+    c.header("cache-control", "public, max-age=3600");
+    return c.json({ ok: true, data: { turnstileSiteKey: c.env.TURNSTILE_SITE_KEY } });
+  });
+
   app.post("/api/auth/send-code", async (c) => {
     assertMutationRequest(c);
-    const { mobile } = await parseBody(c.req.raw, sendCodeSchema, 1_024);
+    const { mobile, turnstileToken } = await parseBody(c.req.raw, sendCodeSchema, 4_096);
+    await verifyHuman(c.env, turnstileToken, c.req.header("CF-Connecting-IP"), new URL(c.req.url).hostname);
     const key = await hashValue(mobile);
     if (!(await storeFor(c.env).reserveSendCode(key, now()))) throw new AppError(429, "RATE_LIMITED", "验证码请求过于频繁");
     if (c.env?.SEND_CODE_GLOBAL && !(await c.env.SEND_CODE_GLOBAL.limit({ key: "global" })).success) throw new AppError(429, "RATE_LIMITED", "验证码服务繁忙，请稍后再试");
@@ -114,7 +127,8 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.post("/api/auth/login", async (c) => {
     assertMutationRequest(c);
-    const { mobile, code } = await parseBody(c.req.raw, loginSchema);
+    const { mobile, code, turnstileToken } = await parseBody(c.req.raw, loginSchema, 4_096);
+    await verifyHuman(c.env, turnstileToken, c.req.header("CF-Connecting-IP"), new URL(c.req.url).hostname);
     const user = await upstreamFor(c.env).login(mobile, code);
     const token = createSessionToken();
     const timestamp = now();
@@ -134,7 +148,8 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.post("/api/auth/login/password", async (c) => {
     assertMutationRequest(c);
-    const { mobile, password } = await parseBody(c.req.raw, passwordLoginSchema);
+    const { mobile, password, turnstileToken } = await parseBody(c.req.raw, passwordLoginSchema, 4_096);
+    await verifyHuman(c.env, turnstileToken, c.req.header("CF-Connecting-IP"), new URL(c.req.url).hostname);
     const user = await upstreamFor(c.env).loginWithPassword(mobile, password);
     const token = createSessionToken();
     const timestamp = now();

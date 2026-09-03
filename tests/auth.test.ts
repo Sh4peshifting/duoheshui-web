@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/worker/app";
 import { AppError, UpstreamSessionInvalidError } from "../src/worker/errors";
 import { hashAccount, hashValue } from "../src/worker/session";
+import type { Env } from "../src/worker/types";
 import { createMockUpstream, MemoryStore } from "./api-test-helpers";
 
 const origin = "https://duoheshui.test";
@@ -10,24 +11,64 @@ describe("authentication and account API", () => {
   let store: MemoryStore;
   let upstream: ReturnType<typeof createMockUpstream>;
   let now: number;
+  let turnstileCalls: string[];
 
   beforeEach(() => {
     store = new MemoryStore();
     upstream = createMockUpstream();
     now = 1_800_000_000_000;
+    turnstileCalls = [];
   });
 
   async function request(path: string, body?: unknown, cookie?: string) {
-    const app = createApp({ store, upstream, now: () => now });
+    const protectedRoute = ["/api/auth/send-code", "/api/auth/login", "/api/auth/login/password"].includes(path);
+    const requestBody = protectedRoute && body && typeof body === "object"
+      ? { turnstileToken: "valid-turnstile-token", ...body }
+      : body;
+    const app = createApp({
+      store,
+      upstream,
+      now: () => now,
+      verifyTurnstile: async (token) => {
+        turnstileCalls.push(token);
+        if (token !== "valid-turnstile-token") throw new AppError(400, "TURNSTILE_FAILED", "人机验证失败，请重新验证");
+      },
+    });
     return app.request(`${origin}${path}`, {
-      method: body === undefined ? "GET" : "POST",
+      method: requestBody === undefined ? "GET" : "POST",
       headers: {
-        ...(body === undefined ? {} : { "content-type": "application/json", origin, "x-duoheshui-client": "web" }),
+        ...(requestBody === undefined ? {} : { "content-type": "application/json", origin, "x-duoheshui-client": "web" }),
         ...(cookie ? { cookie } : {}),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: requestBody === undefined ? undefined : JSON.stringify(requestBody),
     });
   }
+
+  it("exposes only the public Turnstile site key to the login page", async () => {
+    const app = createApp({ store, upstream, now: () => now });
+    const response = await app.request(`${origin}/api/config`, undefined, {
+      TURNSTILE_SITE_KEY: "public-site-key",
+      TURNSTILE_SECRET_KEY: "private-secret-key",
+    } as Env);
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).toContain("public-site-key");
+    expect(text).not.toContain("private-secret-key");
+    expect(response.headers.get("content-security-policy")).toContain("script-src 'self' https://challenges.cloudflare.com");
+    expect(response.headers.get("content-security-policy")).toContain("frame-src https://challenges.cloudflare.com");
+  });
+
+  it("rejects an invalid Turnstile token before calling an upstream login API", async () => {
+    const response = await request("/api/auth/login/password", {
+      mobile: "13800138000",
+      password: "correct-password",
+      turnstileToken: "invalid-turnstile-token",
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ ok: false, error: { code: "TURNSTILE_FAILED" } });
+    expect(upstream.calls.loginWithPassword).toBe(0);
+    expect(turnstileCalls).toEqual(["invalid-turnstile-token"]);
+  });
 
   it("sends a code without retrying", async () => {
     const response = await request("/api/auth/send-code", { mobile: "13800138000" });
