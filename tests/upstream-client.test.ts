@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TianjiUpstream } from "../src/worker/upstream/client";
+import { decryptTianjiPayload, encryptTianjiPayload } from "../src/worker/upstream/crypto";
 
 function env(overrides: Partial<Record<string, string>> = {}): Cloudflare.Env {
   return {
@@ -9,6 +10,11 @@ function env(overrides: Partial<Record<string, string>> = {}): Cloudflare.Env {
     TIANJI_IOT_ORIGIN: "http://iot.tianji-inc.com",
     ...overrides,
   } as unknown as Cloudflare.Env;
+}
+
+function encryptedResponse(payload: unknown): Response {
+  const ciphertext = encryptTianjiPayload(JSON.stringify(payload), "5yoOxt9w", "20190829");
+  return new Response(JSON.stringify({ code: 200, msg: "成功", data: JSON.stringify(ciphertext) }), { status: 200 });
 }
 
 describe("Tianji upstream transport", () => {
@@ -99,5 +105,62 @@ describe("Tianji upstream transport", () => {
     const upstream = new TianjiUpstream(env(), fetcher);
 
     await expect(upstream.sendCode("13800138000")).rejects.toMatchObject({ code: "UPSTREAM_PROTOCOL_ERROR" });
+  });
+
+  it("uses loginByPwd with the legacy pwd field and parses the encrypted session", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => encryptedResponse({ token: "password-token", wallet: { balance: "9.80" } }));
+    const upstream = new TianjiUpstream(env(), fetcher);
+
+    await expect(upstream.loginWithPassword("13800138000", "example-password@1")).resolves.toEqual({
+      mobile: "13800138000",
+      token: "password-token",
+      balance: "9.80",
+    });
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    const message = JSON.parse(new URLSearchParams(String(init?.body)).get("gptechMsg")!) as { data: string; header: { act: string; token: string } };
+    expect(url).toBe("http://newxiaotian.tianji-inc.com/api/v1/UserApi/loginByPwd");
+    expect(message.header).toMatchObject({ act: "loginByPwd", token: "" });
+    expect(JSON.parse(decryptTianjiPayload(message.data, "5yoOxt9w", "20190829"))).toEqual({
+      mobile: "13800138000",
+      pwd: "example-password@1",
+    });
+  });
+
+  it("maps an undecipherable password-login rejection to a credential error", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ code: 111, msg: "密码错误" }), { status: 200 }));
+    const upstream = new TianjiUpstream(env(), fetcher);
+
+    await expect(upstream.loginWithPassword("13800138000", "wrong")).rejects.toMatchObject({
+      status: 400,
+      code: "UPSTREAM_REJECTED",
+      message: "手机号或密码不正确",
+    });
+  });
+
+  it("recognizes missing user info as an invalid upstream session", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ code: -1, msg: "未获取到用户信息" }), { status: 200 }));
+    const upstream = new TianjiUpstream(env(), fetcher);
+
+    await expect(upstream.refreshBalance("13800138000", "expired-token")).rejects.toMatchObject({
+      status: 401,
+      code: "UNAUTHENTICATED",
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("recognizes auth=00001 token errors from water commands", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      code: -1,
+      data: '"8UchnbG7lZs="',
+      header: { auth: "00001" },
+      msg: "token错误!",
+    }), { status: 200 }));
+    const upstream = new TianjiUpstream(env(), fetcher);
+
+    await expect(upstream.startWater("cold", "DEVICE-KEY", "expired-token")).rejects.toMatchObject({
+      status: 401,
+      code: "UNAUTHENTICATED",
+    });
   });
 });

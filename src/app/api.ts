@@ -24,10 +24,22 @@ export interface DeviceInput {
   coldKey?: string | null;
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
     super(message);
   }
+}
+
+type SessionExpiredListener = (message: string) => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => { sessionExpiredListeners.delete(listener); };
+}
+
+export function isSessionExpiredError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 401;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -42,7 +54,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   const payload = (await response.json()) as { ok: boolean; data?: T; error?: { code: string; message: string } };
-  if (!response.ok || !payload.ok) throw new ApiError(payload.error?.code ?? "REQUEST_FAILED", payload.error?.message ?? "请求失败", response.status);
+  if (!response.ok || !payload.ok) {
+    const error = new ApiError(payload.error?.code ?? "REQUEST_FAILED", payload.error?.message ?? "请求失败", response.status);
+    if (response.status === 401) {
+      for (const listener of sessionExpiredListeners) listener(error.message);
+    }
+    throw error;
+  }
   return payload.data as T;
 }
 
@@ -52,6 +70,7 @@ export const api = {
   me: () => request<AccountData>("/api/me"),
   sendCode: (mobile: string) => request<{ sent: true; retryAfter: number }>("/api/auth/send-code", { method: "POST", body: body({ mobile }) }),
   login: (mobile: string, code: string) => request<AccountData>("/api/auth/login", { method: "POST", body: body({ mobile, code }) }),
+  loginWithPassword: (mobile: string, password: string) => request<AccountData>("/api/auth/login/password", { method: "POST", body: body({ mobile, password }) }),
   logout: () => request<AccountData>("/api/auth/logout", { method: "POST", body: body({}) }),
   refreshBalance: () => request<{ balance: string }>("/api/balance/refresh", { method: "POST", body: body({}) }),
   devices: () => request<DevicesData>("/api/devices"),

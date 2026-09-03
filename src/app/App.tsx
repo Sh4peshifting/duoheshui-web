@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { api, type AccountData, type DeviceInput, type DeviceKind, type DevicesData, type DeviceView } from "./api";
+import { api, isSessionExpiredError, onSessionExpired, type AccountData, type DeviceInput, type DeviceKind, type DevicesData, type DeviceView } from "./api";
 
 const emptyDevices: DevicesData = { devices: [] };
 type Notice = { type: "success" | "error"; text: string } | null;
@@ -35,21 +35,38 @@ export function App() {
   const [page, setPage] = useState<Page>("home");
   const [notice, setNotice] = useState<Notice>(null);
   const [editing, setEditing] = useState<DeviceView | "new" | null>(null);
+  const [sessionMessage, setSessionMessage] = useState("");
+  const [startupError, setStartupError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const loadDevices = useCallback(async () => setDevices(await api.devices()), []);
+
+  useEffect(() => onSessionExpired((message) => {
+    setSessionMessage(message || "登录状态已失效，请重新登录");
+    setAccount({ authenticated: false });
+    setDevices(emptyDevices);
+    setEditing(null);
+    setNotice(null);
+    setPage("home");
+  }), []);
 
   useEffect(() => {
     let active = true;
+    setStartupError("");
     api.me().then(async (data) => {
       if (!active) return;
       setAccount(data);
       if (data.authenticated) await loadDevices();
-    }).catch(() => active && setAccount({ authenticated: false }));
+    }).catch((caught) => {
+      if (!active || isSessionExpiredError(caught)) return;
+      setStartupError(caught instanceof Error ? caught.message : "暂时无法连接服务");
+    });
     return () => { active = false; };
-  }, [loadDevices]);
+  }, [loadAttempt, loadDevices]);
 
+  if (startupError) return <StartupErrorScreen message={startupError} onRetry={() => setLoadAttempt((value) => value + 1)} />;
   if (!account) return <LoadingScreen />;
   if (!account.authenticated) {
-    return <LoginScreen onLogin={(data) => { setAccount(data); setPage("home"); void loadDevices(); }} />;
+    return <LoginScreen initialMessage={sessionMessage} onLogin={(data) => { setSessionMessage(""); setAccount(data); setPage("home"); void loadDevices(); }} />;
   }
 
   const activeDevice = devices.devices.find((device) => device.enabled) ?? null;
@@ -59,6 +76,7 @@ export function App() {
     setAccount({ authenticated: false });
     setDevices(emptyDevices);
     setPage("home");
+    setSessionMessage("");
   }
 
   return (
@@ -112,13 +130,21 @@ function LoadingScreen() {
   return <main className="loading-screen" aria-live="polite"><div className="brand-mark"><Droplets size={28} /></div><LoaderCircle className="spin" size={22} /><span>正在安全连接…</span></main>;
 }
 
-function LoginScreen({ onLogin }: { onLogin: (account: AccountData) => void }) {
+function StartupErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <main className="loading-screen startup-error" role="alert"><div className="brand-mark"><CircleAlert size={26} /></div><strong>暂时无法载入账号</strong><span>{message}</span><button className="primary-action" onClick={onRetry}><RefreshCw size={17} />重新加载</button></main>;
+}
+
+type LoginMode = "password" | "code";
+
+function LoginScreen({ initialMessage, onLogin }: { initialMessage: string; onLogin: (account: AccountData) => void }) {
+  const [mode, setMode] = useState<LoginMode>("password");
   const [mobile, setMobile] = useState("");
   const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
   const [sent, setSent] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [busy, setBusy] = useState<"send" | "login" | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialMessage);
 
   useEffect(() => {
     if (countdown <= 0) return;
@@ -137,11 +163,22 @@ function LoginScreen({ onLogin }: { onLogin: (account: AccountData) => void }) {
 
   async function login(event: FormEvent) {
     event.preventDefault(); setError("");
-    if (!/^\d{4,8}$/.test(code)) return setError("请输入收到的短信验证码");
+    if (!/^1[3-9]\d{9}$/.test(mobile)) return setError("请输入有效的中国大陆手机号");
+    if (mode === "code" && !/^\d{4,8}$/.test(code)) return setError("请输入收到的短信验证码");
+    if (mode === "password" && (!password || password.length > 128)) return setError("请输入账号密码");
     setBusy("login");
-    try { onLogin(await api.login(mobile, code)); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "登录失败，请检查验证码"); }
+    try {
+      onLogin(mode === "password" ? await api.loginWithPassword(mobile, password) : await api.login(mobile, code));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "登录失败，请检查登录信息");
+    }
     finally { setBusy(null); }
+  }
+
+  function changeMode(next: LoginMode) {
+    if (busy) return;
+    setMode(next);
+    setError("");
   }
 
   return (
@@ -149,15 +186,23 @@ function LoginScreen({ onLogin }: { onLogin: (account: AccountData) => void }) {
       <section className="login-card" aria-labelledby="login-title">
         <div className="brand-row"><div className="brand-mark"><Droplets size={27} strokeWidth={1.8} /></div><span>DUOHESHUI WEB</span></div>
         <div className="login-copy"><p className="eyebrow">欢迎回来</p><h1 id="login-title">小天同学</h1><p>登录后查看余额、管理常用设备，或直接扫描临时设备二维码。</p></div>
+        <div className="login-mode-switch" role="tablist" aria-label="登录方式">
+          <button type="button" role="tab" aria-selected={mode === "password"} className={mode === "password" ? "active" : ""} onClick={() => changeMode("password")}>密码登录</button>
+          <button type="button" role="tab" aria-selected={mode === "code"} className={mode === "code" ? "active" : ""} onClick={() => changeMode("code")}>验证码登录</button>
+        </div>
         <form className="login-form" onSubmit={login}>
           <label htmlFor="mobile">手机号</label>
           <div className="phone-field"><span>+86</span><input id="mobile" inputMode="tel" autoComplete="tel" value={mobile} onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 11))} placeholder="请输入手机号" disabled={busy !== null} /></div>
-          {sent && <><label htmlFor="code">验证码</label><input id="code" className="code-input" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="请输入短信验证码" autoFocus /></>}
+          {mode === "password" && <><label htmlFor="password">密码</label><input id="password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value.slice(0, 128))} placeholder="请输入账号密码" disabled={busy !== null} /></>}
+          {mode === "code" && sent && <><label htmlFor="code">验证码</label><input id="code" className="code-input" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="请输入短信验证码" disabled={busy !== null} autoFocus /></>}
           {error && <p className="form-error" role="alert"><CircleAlert size={16} />{error}</p>}
-          {!sent ? (
+          {mode === "password" ? (
+            <button type="submit" className="primary-action" disabled={busy !== null || !mobile || !password}>{busy === "login" ? <><LoaderCircle className="spin" size={18} />正在登录</> : <>登录<ChevronRight size={18} /></>}</button>
+          ) : !sent ? (
             <button type="button" className="primary-action" onClick={sendCode} disabled={busy !== null}>{busy === "send" ? <><LoaderCircle className="spin" size={18} />正在发送</> : <>获取验证码<ChevronRight size={18} /></>}</button>
           ) : <><button type="submit" className="primary-action" disabled={busy !== null || !code}>{busy === "login" ? <><LoaderCircle className="spin" size={18} />正在登录</> : <>登录<ChevronRight size={18} /></>}</button><button type="button" className="text-action" onClick={sendCode} disabled={countdown > 0 || busy !== null}>{countdown > 0 ? `${countdown} 秒后可重新发送` : "重新发送验证码"}</button></>}
         </form>
+        <p className="login-hint">建议使用密码登录；短信验证码频繁请求可能触发上游限制。</p>
         <p className="privacy-note"><ShieldCheck size={16} />登录凭据仅由安全服务器处理</p>
       </section>
       <p className="disclaimer">非官方客户端 · 仅限操作本人有权使用的账号与设备</p>

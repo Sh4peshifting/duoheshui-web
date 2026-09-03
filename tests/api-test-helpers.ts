@@ -58,7 +58,7 @@ export class MemoryStore implements Store {
 }
 
 export function createMockUpstream(): Upstream & { calls: Record<string, number>; waterCalls: Array<{ kind: "hot" | "cold"; deviceKey: string }> } {
-  const calls: Record<string, number> = { sendCode: 0, login: 0, refreshBalance: 0, startWater: 0 };
+  const calls: Record<string, number> = { sendCode: 0, login: 0, loginWithPassword: 0, refreshBalance: 0, startWater: 0 };
   const waterCalls: Array<{ kind: "hot" | "cold"; deviceKey: string }> = [];
   return {
     calls,
@@ -68,6 +68,11 @@ export function createMockUpstream(): Upstream & { calls: Record<string, number>
       calls.login++;
       if (code !== "123456") throw Object.assign(new Error("验证码错误"), { code: "UPSTREAM_REJECTED", status: 400 });
       return { mobile, token: "server-only-token", balance: "12.34" };
+    },
+    async loginWithPassword(mobile, password) {
+      calls.loginWithPassword++;
+      if (password !== "correct-password") throw Object.assign(new Error("密码错误"), { code: "UPSTREAM_REJECTED", status: 400 });
+      return { mobile, token: "server-only-password-token", balance: "21.00" };
     },
     async refreshBalance() { calls.refreshBalance++; return "18.88"; },
     async startWater(kind, deviceKey) { calls.startWater++; waterCalls.push({ kind, deviceKey }); },

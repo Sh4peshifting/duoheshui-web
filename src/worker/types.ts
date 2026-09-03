@@ -45,6 +45,7 @@ export interface Store {
 export interface Upstream {
   sendCode(mobile: string): Promise<void>;
   login(mobile: string, code: string): Promise<{ mobile: string; token: string; balance: string }>;
+  loginWithPassword(mobile: string, password: string): Promise<{ mobile: string; token: string; balance: string }>;
   refreshBalance(mobile: string, token: string): Promise<string>;
   startWater(kind: DeviceKind, deviceKey: string, token: string): Promise<void>;
 }

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { D1Store } from "./database";
-import { AppError, normalizeError } from "./errors";
+import { AppError, normalizeError, UpstreamSessionInvalidError } from "./errors";
 import { applySecurityHeaders, assertMutationRequest } from "./security";
 import {
   SESSION_TTL_MS,
@@ -18,6 +18,7 @@ import { TianjiUpstream } from "./upstream/client";
 
 const mobileSchema = z.string().regex(/^1[3-9]\d{9}$/);
 const loginSchema = z.object({ mobile: mobileSchema, code: z.string().regex(/^\d{4,8}$/) }).strict();
+const passwordLoginSchema = z.object({ mobile: mobileSchema, password: z.string().min(1).max(128) }).strict();
 const sendCodeSchema = z.object({ mobile: mobileSchema }).strict();
 const deviceKeySchema = z.string().trim().min(1).max(2048);
 const deviceLabelSchema = z.string().trim().min(1).max(64);
@@ -79,8 +80,19 @@ export function createApp(dependencies: AppDependencies = {}) {
     applySecurityHeaders(c.res);
   });
 
-  app.onError((unknownError, c) => {
+  app.onError(async (unknownError, c) => {
     const error = normalizeError(unknownError);
+    if (unknownError instanceof UpstreamSessionInvalidError) {
+      const rawToken = readSessionToken(c.req.header("cookie"));
+      if (rawToken) {
+        try {
+          await storeFor(c.env).deleteSession(await hashValue(rawToken));
+        } catch {
+          console.error(JSON.stringify({ event: "session_invalidation_cleanup_failed", route: c.req.path }));
+        }
+      }
+      c.header("set-cookie", clearSessionCookie());
+    }
     if (error.status >= 500) console.error(JSON.stringify({ event: "request_error", route: c.req.path, category: error.code }));
     const response = c.json({ ok: false, error: { code: error.code, message: error.message } }, error.status as 400);
     applySecurityHeaders(response);
@@ -118,6 +130,25 @@ export function createApp(dependencies: AppDependencies = {}) {
     return c.json({ ok: true, data: { authenticated: true, mobile: maskMobile(user.mobile), balance: user.balance } });
   });
 
+  app.post("/api/auth/login/password", async (c) => {
+    assertMutationRequest(c);
+    const { mobile, password } = await parseBody(c.req.raw, passwordLoginSchema);
+    const user = await upstreamFor(c.env).loginWithPassword(mobile, password);
+    const token = createSessionToken();
+    const timestamp = now();
+    await storeFor(c.env).putSession({
+      sidHash: await hashValue(token),
+      mobile: user.mobile,
+      upstreamToken: user.token,
+      balance: user.balance,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      expiresAt: timestamp + SESSION_TTL_MS,
+    });
+    c.header("set-cookie", sessionCookie(token));
+    return c.json({ ok: true, data: { authenticated: true, mobile: maskMobile(user.mobile), balance: user.balance } });
+  });
+
   app.post("/api/auth/logout", async (c) => {
     assertMutationRequest(c);
     const rawToken = readSessionToken(c.req.header("cookie"));
@@ -128,10 +159,15 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.get("/api/me", async (c) => {
     try {
-      const session = await authenticate(storeFor(c.env), c.req.header("cookie"), now());
-      return c.json({ ok: true, data: { authenticated: true, mobile: maskMobile(session.mobile), balance: session.balance ?? "0.00" } });
+      const store = storeFor(c.env);
+      const session = await authenticate(store, c.req.header("cookie"), now());
+      const balance = await upstreamFor(c.env).refreshBalance(session.mobile, session.upstreamToken);
+      await store.updateBalance(session.sidHash, balance, now());
+      return c.json({ ok: true, data: { authenticated: true, mobile: maskMobile(session.mobile), balance } });
     } catch (error) {
-      if (error instanceof AppError && error.status === 401) return c.json({ ok: true, data: { authenticated: false } });
+      if (error instanceof AppError && error.status === 401 && !(error instanceof UpstreamSessionInvalidError)) {
+        return c.json({ ok: true, data: { authenticated: false } });
+      }
       throw error;
     }
   });

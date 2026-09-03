@@ -6,9 +6,10 @@
 
 ## 已实现
 
-- 手机号 + 短信验证码登录，60 秒/小时双层短信限速。
+- 支持手机号 + 账号密码或短信验证码登录，60 秒/小时双层短信限速；密码只用于本次上游登录请求，不落库。
 - 自有 HttpOnly、Secure、SameSite=Strict 会话，固定有效期 365 天；D1 仅保存 Session token 的 SHA-256。
-- 余额缓存与手动刷新；只有余额查询允许一次网络级重试。
+- 页面加载时通过用户信息接口验证上游凭据并刷新余额；余额也可手动刷新，只有余额查询允许一次网络级重试。
+- 用户信息、余额或出水响应明确表明 token 错误、失效或过期时，立即清除本地会话并返回登录页；普通网络故障不会触发注销。
 - 支持保存多台常用饮水机；每台设备分别关联热水口和冷水口二维码，并可选择当前启用设备。
 - 二维码在浏览器本地解码，画面不上传；API 不返回完整 device key。
 - 支持临时设备扫码即解锁且不保存二维码；所有解锁无需二次确认，UUID 幂等、同类出水口三秒冷却且不自动重试。
@@ -66,7 +67,8 @@ pnpm build
 
 - 三组固定 DES-CBC 向量的双向一致性。
 - gptechMsg 字段、每次生成新 `msg_id`、只进行一次 form encoding。
-- 验证码发送、登录失败、登录成功、Session Cookie、余额刷新。
+- 验证码发送、验证码/密码登录失败与成功、Session Cookie、加载时用户信息验证及余额刷新。
+- 用户信息缺失、`auth=00001` 和 token 失效消息的自动注销处理。
 - 多设备增删改、当前设备切换、旧热/冷水绑定迁移与完整 device key 不回传。
 - 临时二维码仅使用一次且不进入设备列表。
 - 未登录、未绑定设备、重复 requestId、三秒限流与热/冷启动。
@@ -141,6 +143,7 @@ pnpm wrangler d1 migrations apply duoheshui --remote
 ```text
 POST   /api/auth/send-code
 POST   /api/auth/login
+POST   /api/auth/login/password
 POST   /api/auth/logout
 GET    /api/me
 POST   /api/balance/refresh

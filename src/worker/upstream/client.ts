@@ -1,7 +1,7 @@
-import { AppError, UpstreamProtocolError } from "../errors";
+import { AppError, UpstreamProtocolError, UpstreamSessionInvalidError } from "../errors";
 import type { DeviceKind, Env, Upstream } from "../types";
 import { decryptTianjiPayload, encryptTianjiPayload } from "./crypto";
-import { buildGptechMessage, buildGptechRequestBody, parseEncryptedResponse } from "./protocol";
+import { assertUpstreamSessionValid, buildGptechMessage, buildGptechRequestBody, parseEncryptedResponse } from "./protocol";
 
 interface TianjiUserPayload {
   mobile: string;
@@ -202,6 +202,17 @@ export class TianjiUpstream implements Upstream {
     );
   }
 
+  private parseLogin(text: string, mobile: string, rejectedMessage: string) {
+    try {
+      const user = this.decrypt<TianjiUserPayload>(text);
+      if (!user?.token || !user.wallet) throw new UpstreamProtocolError();
+      return { mobile: user.mobile || mobile, token: user.token, balance: stringBalance(user.wallet.balance) };
+    } catch (error) {
+      if (!(error instanceof UpstreamProtocolError)) throw error;
+      throw new AppError(400, "UPSTREAM_REJECTED", rejectedMessage);
+    }
+  }
+
   async sendCode(mobile: string): Promise<void> {
     const text = await this.post(
       this.userOrigin,
@@ -232,9 +243,19 @@ export class TianjiUpstream implements Upstream {
       "",
       10_000,
     );
-    const user = this.decrypt<TianjiUserPayload>(text);
-    if (!user.mobile || !user.token || !user.wallet) throw new UpstreamProtocolError();
-    return { mobile: user.mobile, token: user.token, balance: stringBalance(user.wallet.balance) };
+    return this.parseLogin(text, mobile, "手机号或验证码不正确");
+  }
+
+  async loginWithPassword(mobile: string, password: string) {
+    const text = await this.post(
+      this.userOrigin,
+      "/api/v1/UserApi/loginByPwd",
+      "loginByPwd",
+      JSON.stringify({ mobile, pwd: password }),
+      "",
+      10_000,
+    );
+    return this.parseLogin(text, mobile, "手机号或密码不正确");
   }
 
   async refreshBalance(mobile: string, token: string): Promise<string> {
@@ -249,7 +270,9 @@ export class TianjiUpstream implements Upstream {
           token,
           8_000,
         );
+        assertUpstreamSessionValid(text, true);
         const user = this.decrypt<TianjiUserPayload>(text);
+        if (user.wallet?.balance === undefined || user.wallet.balance === null) throw new UpstreamSessionInvalidError();
         return stringBalance(user.wallet?.balance);
       } catch (error) {
         lastError = error;
@@ -268,6 +291,7 @@ export class TianjiUpstream implements Upstream {
       token,
       8_000,
     );
+    assertUpstreamSessionValid(text);
     const result = this.decrypt<{ order_sn?: string }>(text);
     if (!result.order_sn) throw new UpstreamProtocolError();
     console.info(JSON.stringify({ event: "water_command", kind, success: true }));

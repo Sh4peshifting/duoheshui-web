@@ -29,6 +29,13 @@ export class UpstreamProtocolError extends AppError {
   }
 }
 
+export class UpstreamSessionInvalidError extends AppError {
+  constructor() {
+    super(401, "UNAUTHENTICATED", "上游登录状态已失效，请重新登录");
+    this.name = "UpstreamSessionInvalidError";
+  }
+}
+
 export function normalizeError(error: unknown): AppError {
   if (error instanceof AppError) return error;
   if (error instanceof Error) {
