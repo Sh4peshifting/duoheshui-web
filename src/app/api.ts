@@ -7,12 +7,22 @@ export interface AccountData {
 }
 
 export interface DeviceView {
-  bound: boolean;
+  id: string;
   label: string;
-  fingerprint?: string;
+  enabled: boolean;
+  hot: { bound: boolean; fingerprint?: string };
+  cold: { bound: boolean; fingerprint?: string };
 }
 
-export type DevicesData = Record<DeviceKind, DeviceView>;
+export interface DevicesData {
+  devices: DeviceView[];
+}
+
+export interface DeviceInput {
+  label: string;
+  hotKey?: string | null;
+  coldKey?: string | null;
+}
 
 class ApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -27,7 +37,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: "same-origin",
     headers: {
       ...(init.body ? { "content-type": "application/json" } : {}),
-      ...(["POST", "PUT", "DELETE"].includes(method) ? { "x-duoheshui-client": "web" } : {}),
+      ...(["POST", "PUT", "PATCH", "DELETE"].includes(method) ? { "x-duoheshui-client": "web" } : {}),
       ...init.headers,
     },
   });
@@ -45,7 +55,10 @@ export const api = {
   logout: () => request<AccountData>("/api/auth/logout", { method: "POST", body: body({}) }),
   refreshBalance: () => request<{ balance: string }>("/api/balance/refresh", { method: "POST", body: body({}) }),
   devices: () => request<DevicesData>("/api/devices"),
-  putDevice: (kind: DeviceKind, deviceKey: string, label: string) => request<DeviceView>(`/api/devices/${kind}`, { method: "PUT", body: body({ deviceKey, label }) }),
-  deleteDevice: (kind: DeviceKind) => request<{ bound: false }>(`/api/devices/${kind}`, { method: "DELETE" }),
+  createDevice: (input: DeviceInput) => request<DeviceView>("/api/devices", { method: "POST", body: body(input) }),
+  updateDevice: (id: string, input: Partial<DeviceInput>) => request<DeviceView>(`/api/devices/${id}`, { method: "PATCH", body: body(input) }),
+  deleteDevice: (id: string) => request<{ deleted: true }>(`/api/devices/${id}`, { method: "DELETE" }),
+  activateDevice: (id: string) => request<{ enabled: true }>(`/api/devices/${id}/activate`, { method: "POST", body: body({}) }),
   startWater: (kind: DeviceKind, requestId: string) => request<{ started: true }>(`/api/water/${kind}/start`, { method: "POST", body: body({ requestId }) }),
+  startTemporaryWater: (kind: DeviceKind, deviceKey: string, requestId: string) => request<{ started: true }>("/api/water/temporary/start", { method: "POST", body: body({ kind, deviceKey, requestId }) }),
 };

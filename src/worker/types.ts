@@ -11,11 +11,12 @@ export interface SessionRecord {
 }
 
 export interface DeviceRecord {
+  id: string;
   sidHash: string;
-  kind: DeviceKind;
   label: string;
-  deviceKey: string;
-  fingerprint: string;
+  enabled: boolean;
+  hot: { deviceKey: string; fingerprint: string } | null;
+  cold: { deviceKey: string; fingerprint: string } | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -28,9 +29,11 @@ export interface Store {
   deleteSession(sidHash: string): Promise<void>;
   updateBalance(sidHash: string, balance: string, updatedAt: number): Promise<void>;
   listDevices(sidHash: string): Promise<DeviceRecord[]>;
-  getDevice(sidHash: string, kind: DeviceKind): Promise<DeviceRecord | null>;
+  getDevice(sidHash: string, id: string): Promise<DeviceRecord | null>;
+  getActiveDevice(sidHash: string): Promise<DeviceRecord | null>;
   putDevice(record: DeviceRecord): Promise<void>;
-  deleteDevice(sidHash: string, kind: DeviceKind): Promise<void>;
+  deleteDevice(sidHash: string, id: string): Promise<void>;
+  setActiveDevice(sidHash: string, id: string): Promise<boolean>;
   reserveCommand(
     sidHash: string,
     requestId: string,

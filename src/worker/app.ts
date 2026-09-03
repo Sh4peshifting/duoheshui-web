@@ -13,14 +13,27 @@ import {
   readSessionToken,
   sessionCookie,
 } from "./session";
-import type { AppDependencies, DeviceKind, Env, Store, Upstream } from "./types";
+import type { AppDependencies, DeviceRecord, Env, Store, Upstream } from "./types";
 import { TianjiUpstream } from "./upstream/client";
 
 const mobileSchema = z.string().regex(/^1[3-9]\d{9}$/);
 const loginSchema = z.object({ mobile: mobileSchema, code: z.string().regex(/^\d{4,8}$/) }).strict();
 const sendCodeSchema = z.object({ mobile: mobileSchema }).strict();
-const deviceSchema = z.object({ deviceKey: z.string().trim().min(1).max(2048), label: z.string().trim().max(64).optional() }).strict();
+const deviceKeySchema = z.string().trim().min(1).max(2048);
+const deviceLabelSchema = z.string().trim().min(1).max(64);
+const createDeviceSchema = z.object({
+  label: deviceLabelSchema,
+  hotKey: deviceKeySchema.optional(),
+  coldKey: deviceKeySchema.optional(),
+}).strict().refine((value) => value.hotKey || value.coldKey);
+const updateDeviceSchema = z.object({
+  label: deviceLabelSchema.optional(),
+  hotKey: deviceKeySchema.nullable().optional(),
+  coldKey: deviceKeySchema.nullable().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0);
 const commandSchema = z.object({ requestId: z.string().uuid() }).strict();
+const temporaryCommandSchema = commandSchema.extend({ kind: z.enum(["hot", "cold"]), deviceKey: deviceKeySchema }).strict();
+const deviceIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,80}$/);
 
 async function parseBody<T>(request: Request, schema: z.ZodType<T>, maxBytes = 2_048): Promise<T> {
   const declared = Number(request.headers.get("content-length") || 0);
@@ -36,6 +49,22 @@ async function parseBody<T>(request: Request, schema: z.ZodType<T>, maxBytes = 2
 
 function fingerprint(deviceKey: string): string {
   return `******${deviceKey.slice(-6).toUpperCase()}`;
+}
+
+function parseDeviceId(value: string): string {
+  const parsed = deviceIdSchema.safeParse(value);
+  if (!parsed.success) throw new AppError(400, "BAD_REQUEST", "设备 ID 无效");
+  return parsed.data;
+}
+
+function deviceView(device: DeviceRecord) {
+  return {
+    id: device.id,
+    label: device.label,
+    enabled: device.enabled,
+    hot: { bound: Boolean(device.hot), ...(device.hot ? { fingerprint: device.hot.fingerprint } : {}) },
+    cold: { bound: Boolean(device.cold), ...(device.cold ? { fingerprint: device.cold.fingerprint } : {}) },
+  };
 }
 
 export function createApp(dependencies: AppDependencies = {}) {
@@ -120,53 +149,93 @@ export function createApp(dependencies: AppDependencies = {}) {
     const store = storeFor(c.env);
     const session = await authenticate(store, c.req.header("cookie"), now());
     const devices = await store.listDevices(session.sidHash);
-    const data: Record<DeviceKind, { bound: boolean; label: string; fingerprint?: string }> = {
-      hot: { bound: false, label: "热水" },
-      cold: { bound: false, label: "冷水" },
+    return c.json({ ok: true, data: { devices: devices.map(deviceView) } });
+  });
+
+  app.post("/api/devices", async (c) => {
+    assertMutationRequest(c);
+    const store = storeFor(c.env);
+    const session = await authenticate(store, c.req.header("cookie"), now());
+    const input = await parseBody(c.req.raw, createDeviceSchema, 8_192);
+    const timestamp = now();
+    const record = {
+      id: crypto.randomUUID(),
+      sidHash: session.sidHash,
+      label: input.label,
+      enabled: (await store.listDevices(session.sidHash)).length === 0,
+      hot: input.hotKey ? { deviceKey: input.hotKey, fingerprint: fingerprint(input.hotKey) } : null,
+      cold: input.coldKey ? { deviceKey: input.coldKey, fingerprint: fingerprint(input.coldKey) } : null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
-    for (const device of devices) data[device.kind] = { bound: true, label: device.label, fingerprint: device.fingerprint };
-    return c.json({ ok: true, data });
+    await store.putDevice(record);
+    return c.json({ ok: true, data: deviceView(record) }, 201);
+  });
+
+  app.patch("/api/devices/:id", async (c) => {
+    assertMutationRequest(c);
+    const store = storeFor(c.env);
+    const session = await authenticate(store, c.req.header("cookie"), now());
+    const id = parseDeviceId(c.req.param("id"));
+    const input = await parseBody(c.req.raw, updateDeviceSchema, 8_192);
+    const existing = await store.getDevice(session.sidHash, id);
+    if (!existing) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
+    const hot = input.hotKey === undefined
+      ? existing.hot
+      : input.hotKey === null ? null : { deviceKey: input.hotKey, fingerprint: fingerprint(input.hotKey) };
+    const cold = input.coldKey === undefined
+      ? existing.cold
+      : input.coldKey === null ? null : { deviceKey: input.coldKey, fingerprint: fingerprint(input.coldKey) };
+    if (!hot && !cold) throw new AppError(400, "BAD_REQUEST", "设备至少需要绑定一个出水口");
+    const updated = { ...existing, label: input.label ?? existing.label, hot, cold, updatedAt: now() };
+    await store.putDevice(updated);
+    return c.json({ ok: true, data: deviceView(updated) });
+  });
+
+  app.delete("/api/devices/:id", async (c) => {
+    assertMutationRequest(c);
+    const store = storeFor(c.env);
+    const session = await authenticate(store, c.req.header("cookie"), now());
+    const id = parseDeviceId(c.req.param("id"));
+    if (!(await store.getDevice(session.sidHash, id))) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
+    await store.deleteDevice(session.sidHash, id);
+    return c.json({ ok: true, data: { deleted: true } });
+  });
+
+  app.post("/api/devices/:id/activate", async (c) => {
+    assertMutationRequest(c);
+    const store = storeFor(c.env);
+    const session = await authenticate(store, c.req.header("cookie"), now());
+    const id = parseDeviceId(c.req.param("id"));
+    if (!(await store.setActiveDevice(session.sidHash, id))) throw new AppError(404, "DEVICE_NOT_FOUND", "设备不存在");
+    return c.json({ ok: true, data: { enabled: true } });
+  });
+
+  app.post("/api/water/temporary/start", async (c) => {
+    assertMutationRequest(c);
+    const store = storeFor(c.env);
+    const session = await authenticate(store, c.req.header("cookie"), now());
+    const { requestId, kind, deviceKey } = await parseBody(c.req.raw, temporaryCommandSchema, 4_096);
+    const reservation = await store.reserveCommand(session.sidHash, requestId, kind, now());
+    if (reservation === "duplicate") throw new AppError(409, "DUPLICATE_REQUEST", "该指令已处理");
+    if (reservation === "rate_limited") throw new AppError(429, "RATE_LIMITED", "操作过于频繁，请稍后再试");
+    await upstreamFor(c.env).startWater(kind, deviceKey, session.upstreamToken);
+    return c.json({ ok: true, data: { started: true } });
   });
 
   for (const kind of ["hot", "cold"] as const) {
-    app.put(`/api/devices/${kind}`, async (c) => {
-      assertMutationRequest(c);
-      const store = storeFor(c.env);
-      const session = await authenticate(store, c.req.header("cookie"), now());
-      const { deviceKey, label } = await parseBody(c.req.raw, deviceSchema, 4_096);
-      const existing = await store.getDevice(session.sidHash, kind);
-      const timestamp = now();
-      await store.putDevice({
-        sidHash: session.sidHash,
-        kind,
-        label: label || (kind === "hot" ? "热水" : "冷水"),
-        deviceKey,
-        fingerprint: fingerprint(deviceKey),
-        createdAt: existing?.createdAt ?? timestamp,
-        updatedAt: timestamp,
-      });
-      return c.json({ ok: true, data: { bound: true, label: label || (kind === "hot" ? "热水" : "冷水"), fingerprint: fingerprint(deviceKey) } });
-    });
-
-    app.delete(`/api/devices/${kind}`, async (c) => {
-      assertMutationRequest(c);
-      const store = storeFor(c.env);
-      const session = await authenticate(store, c.req.header("cookie"), now());
-      await store.deleteDevice(session.sidHash, kind);
-      return c.json({ ok: true, data: { bound: false } });
-    });
-
     app.post(`/api/water/${kind}/start`, async (c) => {
       assertMutationRequest(c);
       const store = storeFor(c.env);
       const session = await authenticate(store, c.req.header("cookie"), now());
       const { requestId } = await parseBody(c.req.raw, commandSchema);
-      const device = await store.getDevice(session.sidHash, kind);
-      if (!device) throw new AppError(404, "DEVICE_NOT_FOUND", "尚未绑定对应设备");
+      const device = await store.getActiveDevice(session.sidHash);
+      const outlet = device?.[kind];
+      if (!device || !outlet) throw new AppError(404, "DEVICE_NOT_FOUND", "当前设备尚未绑定对应出水口");
       const reservation = await store.reserveCommand(session.sidHash, requestId, kind, now());
       if (reservation === "duplicate") throw new AppError(409, "DUPLICATE_REQUEST", "该指令已处理");
       if (reservation === "rate_limited") throw new AppError(429, "RATE_LIMITED", "操作过于频繁，请稍后再试");
-      await upstreamFor(c.env).startWater(kind, device.deviceKey, session.upstreamToken);
+      await upstreamFor(c.env).startWater(kind, outlet.deviceKey, session.upstreamToken);
       return c.json({ ok: true, data: { started: true } });
     });
   }

@@ -29,9 +29,26 @@ export class MemoryStore implements Store {
   async listDevices(sidHash: string) {
     return [...this.devices.values()].filter((item) => item.sidHash === sidHash);
   }
-  async getDevice(sidHash: string, kind: "hot" | "cold") { return this.devices.get(`${sidHash}:${kind}`) ?? null; }
-  async putDevice(record: DeviceRecord) { this.devices.set(`${record.sidHash}:${record.kind}`, record); }
-  async deleteDevice(sidHash: string, kind: "hot" | "cold") { this.devices.delete(`${sidHash}:${kind}`); }
+  async getDevice(sidHash: string, id: string) { return this.devices.get(`${sidHash}:${id}`) ?? null; }
+  async getActiveDevice(sidHash: string) {
+    return [...this.devices.values()].find((item) => item.sidHash === sidHash && item.enabled) ?? null;
+  }
+  async putDevice(record: DeviceRecord) { this.devices.set(`${record.sidHash}:${record.id}`, record); }
+  async deleteDevice(sidHash: string, id: string) {
+    const existing = await this.getDevice(sidHash, id);
+    this.devices.delete(`${sidHash}:${id}`);
+    if (existing?.enabled) {
+      const next = [...this.devices.values()].find((item) => item.sidHash === sidHash);
+      if (next) this.devices.set(`${sidHash}:${next.id}`, { ...next, enabled: true });
+    }
+  }
+  async setActiveDevice(sidHash: string, id: string) {
+    if (!(await this.getDevice(sidHash, id))) return false;
+    for (const [key, device] of this.devices) {
+      if (device.sidHash === sidHash) this.devices.set(key, { ...device, enabled: device.id === id });
+    }
+    return true;
+  }
   async reserveCommand(sidHash: string, requestId: string, kind: "hot" | "cold", now: number) {
     if (this.commands.some((item) => item.sidHash === sidHash && item.requestId === requestId)) return "duplicate" as const;
     if (this.commands.some((item) => item.sidHash === sidHash && item.kind === kind && item.createdAt > now - 3_000)) return "rate_limited" as const;
@@ -40,10 +57,12 @@ export class MemoryStore implements Store {
   }
 }
 
-export function createMockUpstream(): Upstream & { calls: Record<string, number> } {
+export function createMockUpstream(): Upstream & { calls: Record<string, number>; waterCalls: Array<{ kind: "hot" | "cold"; deviceKey: string }> } {
   const calls: Record<string, number> = { sendCode: 0, login: 0, refreshBalance: 0, startWater: 0 };
+  const waterCalls: Array<{ kind: "hot" | "cold"; deviceKey: string }> = [];
   return {
     calls,
+    waterCalls,
     async sendCode() { calls.sendCode++; },
     async login(mobile, code) {
       calls.login++;
@@ -51,6 +70,6 @@ export function createMockUpstream(): Upstream & { calls: Record<string, number>
       return { mobile, token: "server-only-token", balance: "12.34" };
     },
     async refreshBalance() { calls.refreshBalance++; return "18.88"; },
-    async startWater() { calls.startWater++; },
+    async startWater(kind, deviceKey) { calls.startWater++; waterCalls.push({ kind, deviceKey }); },
   };
 }

@@ -9,9 +9,9 @@
 - 手机号 + 短信验证码登录，60 秒/小时双层短信限速。
 - 自有 HttpOnly、Secure、SameSite=Strict 会话，固定有效期 365 天；D1 仅保存 Session token 的 SHA-256。
 - 余额缓存与手动刷新；只有余额查询允许一次网络级重试。
-- 热水/冷水二维码分别关联，可相机扫描或手工粘贴。
+- 支持保存多台常用饮水机；每台设备分别关联热水口和冷水口二维码，并可选择当前启用设备。
 - 二维码在浏览器本地解码，画面不上传；API 不返回完整 device key。
-- 热水启动二次确认、UUID 幂等、同类设备三秒冷却；出水指令不自动重试。
+- 支持临时设备扫码即解锁且不保存二维码；所有解锁无需二次确认，UUID 幂等、同类出水口三秒冷却且不自动重试。
 - DES-CBC Tianji 协议适配器、AES-256-GCM 数据加密、统一 API 错误、安全响应头和敏感日志约束。
 
 ## 架构
@@ -31,7 +31,7 @@ Mobile Browser (HTTPS)
 
 ## 本地开发
 
-要求 Node.js 20+ 与 pnpm。
+要求 Node.js 22+ 与 pnpm。
 
 ```bash
 pnpm install
@@ -44,7 +44,7 @@ pnpm dev
 
 - `APP_DATA_KEY`：随机 32 字节的 base64url 字符串。
 - `TIANJI_DES_KEY` / `TIANJI_DES_IV`：旧 Android 协议兼容值，各 8 字节。
-- 两个 Tianji origin：默认应使用 HTTPS。
+- 两个 Tianji origin：按当前已确认的上游能力填写下文列出的 HTTP 地址。
 
 可以用 Node.js 生成 `APP_DATA_KEY`：
 
@@ -67,7 +67,8 @@ pnpm build
 - 三组固定 DES-CBC 向量的双向一致性。
 - gptechMsg 字段、每次生成新 `msg_id`、只进行一次 form encoding。
 - 验证码发送、登录失败、登录成功、Session Cookie、余额刷新。
-- hot/cold 分槽保存、完整 device key 不回传。
+- 多设备增删改、当前设备切换、旧热/冷水绑定迁移与完整 device key 不回传。
+- 临时二维码仅使用一次且不进入设备列表。
 - 未登录、未绑定设备、重复 requestId、三秒限流与热/冷启动。
 
 所有测试使用 mock 上游，不会发送真实短信或真实出水指令。
@@ -85,7 +86,7 @@ pnpm build
    - `TIANJI_DES_IV`：Tianji 协议的 8 字节 IV。
    - `TIANJI_USER_ORIGIN=http://newxiaotian.tianji-inc.com`
    - `TIANJI_IOT_ORIGIN=http://iot.tianji-inc.com`
-7. 打开 D1 数据库的 **Console**，粘贴并执行 `migrations/0001_init.sql` 的完整内容。Migration 使用 `IF NOT EXISTS`，以后再通过 Wrangler 应用也不会重复建表失败。
+7. 打开 D1 数据库的 **Console**，依次粘贴并执行 `migrations/0001_init.sql`、`migrations/0002_multi_device.sql` 的完整内容。第二个 migration 会把旧版账户已有的热/冷水绑定合并到一条默认启用的“原有设备”记录中。
 8. 回到 Worker 的 **Settings → Builds → Connect**，授权 GitHub/GitLab 并选择仓库。生产分支选择实际默认分支，项目根目录为 `/`。
 9. Build 配置：
    - Build command：`pnpm build`
@@ -101,6 +102,8 @@ pnpm build
 ```bash
 pnpm wrangler d1 migrations apply duoheshui --remote
 ```
+
+已有线上版本升级时，必须先对远程 D1 执行 `0002_multi_device.sql`，确认 migration 成功后再推送本次代码触发 Worker 部署；不要先部署查询 `saved_devices` 的新 Worker。
 
 ## 上游明文 HTTP 说明
 
@@ -142,12 +145,13 @@ POST   /api/auth/logout
 GET    /api/me
 POST   /api/balance/refresh
 GET    /api/devices
-PUT    /api/devices/hot
-PUT    /api/devices/cold
-DELETE /api/devices/hot
-DELETE /api/devices/cold
+POST   /api/devices
+PATCH  /api/devices/:id
+DELETE /api/devices/:id
+POST   /api/devices/:id/activate
 POST   /api/water/hot/start
 POST   /api/water/cold/start
+POST   /api/water/temporary/start
 GET    /api/health
 ```
 

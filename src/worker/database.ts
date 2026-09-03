@@ -12,11 +12,14 @@ type SessionRow = {
 };
 
 type DeviceRow = {
+  id: string;
   sid_hash: string;
-  kind: DeviceKind;
-  label: string | null;
-  device_key_enc: string;
-  device_fingerprint: string;
+  label: string;
+  enabled: number;
+  hot_device_key_enc: string | null;
+  hot_device_fingerprint: string | null;
+  cold_device_key_enc: string | null;
+  cold_device_fingerprint: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -81,45 +84,92 @@ export class D1Store implements Store {
 
   private async mapDevice(row: DeviceRow): Promise<DeviceRecord> {
     return {
+      id: row.id,
       sidHash: row.sid_hash,
-      kind: row.kind,
-      label: row.label || (row.kind === "hot" ? "热水" : "冷水"),
-      deviceKey: await decryptField(row.device_key_enc, this.secret),
-      fingerprint: row.device_fingerprint,
+      label: row.label,
+      enabled: row.enabled === 1,
+      hot: row.hot_device_key_enc && row.hot_device_fingerprint
+        ? { deviceKey: await decryptField(row.hot_device_key_enc, this.secret), fingerprint: row.hot_device_fingerprint }
+        : null,
+      cold: row.cold_device_key_enc && row.cold_device_fingerprint
+        ? { deviceKey: await decryptField(row.cold_device_key_enc, this.secret), fingerprint: row.cold_device_fingerprint }
+        : null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
 
   async listDevices(sidHash: string): Promise<DeviceRecord[]> {
-    const result = await this.db.prepare("SELECT * FROM devices WHERE sid_hash = ? ORDER BY kind").bind(sidHash).all<DeviceRow>();
+    const result = await this.db.prepare(
+      "SELECT * FROM saved_devices WHERE sid_hash = ? ORDER BY enabled DESC, created_at ASC",
+    ).bind(sidHash).all<DeviceRow>();
     return Promise.all(result.results.map((row) => this.mapDevice(row)));
   }
 
-  async getDevice(sidHash: string, kind: DeviceKind): Promise<DeviceRecord | null> {
-    const row = await this.db.prepare("SELECT * FROM devices WHERE sid_hash = ? AND kind = ?").bind(sidHash, kind).first<DeviceRow>();
+  async getDevice(sidHash: string, id: string): Promise<DeviceRecord | null> {
+    const row = await this.db.prepare("SELECT * FROM saved_devices WHERE sid_hash = ? AND id = ?").bind(sidHash, id).first<DeviceRow>();
+    return row ? this.mapDevice(row) : null;
+  }
+
+  async getActiveDevice(sidHash: string): Promise<DeviceRecord | null> {
+    const row = await this.db.prepare(
+      "SELECT * FROM saved_devices WHERE sid_hash = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
+    ).bind(sidHash).first<DeviceRow>();
     return row ? this.mapDevice(row) : null;
   }
 
   async putDevice(record: DeviceRecord): Promise<void> {
     await this.db.prepare(
-      `INSERT INTO devices (sid_hash, kind, label, device_key_enc, device_fingerprint, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(sid_hash, kind) DO UPDATE SET label = excluded.label, device_key_enc = excluded.device_key_enc,
-       device_fingerprint = excluded.device_fingerprint, updated_at = excluded.updated_at`,
+      `INSERT INTO saved_devices (
+         id, sid_hash, label, enabled,
+         hot_device_key_enc, hot_device_fingerprint,
+         cold_device_key_enc, cold_device_fingerprint,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         label = excluded.label,
+         enabled = excluded.enabled,
+         hot_device_key_enc = excluded.hot_device_key_enc,
+         hot_device_fingerprint = excluded.hot_device_fingerprint,
+         cold_device_key_enc = excluded.cold_device_key_enc,
+         cold_device_fingerprint = excluded.cold_device_fingerprint,
+         updated_at = excluded.updated_at
+       WHERE saved_devices.sid_hash = excluded.sid_hash`,
     ).bind(
+      record.id,
       record.sidHash,
-      record.kind,
       record.label,
-      await encryptField(record.deviceKey, this.secret),
-      record.fingerprint,
+      record.enabled ? 1 : 0,
+      record.hot ? await encryptField(record.hot.deviceKey, this.secret) : null,
+      record.hot?.fingerprint ?? null,
+      record.cold ? await encryptField(record.cold.deviceKey, this.secret) : null,
+      record.cold?.fingerprint ?? null,
       record.createdAt,
       record.updatedAt,
     ).run();
   }
 
-  async deleteDevice(sidHash: string, kind: DeviceKind): Promise<void> {
-    await this.db.prepare("DELETE FROM devices WHERE sid_hash = ? AND kind = ?").bind(sidHash, kind).run();
+  async deleteDevice(sidHash: string, id: string): Promise<void> {
+    const device = await this.getDevice(sidHash, id);
+    await this.db.prepare("DELETE FROM saved_devices WHERE sid_hash = ? AND id = ?").bind(sidHash, id).run();
+    if (device?.enabled) {
+      const next = await this.db.prepare(
+        "SELECT id FROM saved_devices WHERE sid_hash = ? ORDER BY created_at ASC LIMIT 1",
+      ).bind(sidHash).first<{ id: string }>();
+      if (next) await this.setActiveDevice(sidHash, next.id);
+    }
+  }
+
+  async setActiveDevice(sidHash: string, id: string): Promise<boolean> {
+    const found = await this.db.prepare(
+      "SELECT 1 AS found FROM saved_devices WHERE sid_hash = ? AND id = ?",
+    ).bind(sidHash, id).first<{ found: number }>();
+    if (!found) return false;
+    await this.db.batch([
+      this.db.prepare("UPDATE saved_devices SET enabled = 0 WHERE sid_hash = ?").bind(sidHash),
+      this.db.prepare("UPDATE saved_devices SET enabled = 1 WHERE sid_hash = ? AND id = ?").bind(sidHash, id),
+    ]);
+    return true;
   }
 
   async reserveCommand(sidHash: string, requestId: string, kind: DeviceKind, now: number) {
