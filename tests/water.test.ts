@@ -93,7 +93,6 @@ describe("device and water APIs", () => {
   it("starts a temporary scanned outlet without saving it", async () => {
     expect((await api("/api/water/temporary/start", "POST", {
       requestId: "44444444-4444-4444-8444-444444444444",
-      kind: "cold",
       deviceKey: "TEMP-COLD-KEY",
     })).status).toBe(200);
     expect(upstream.waterCalls).toEqual([{ kind: "cold", deviceKey: "TEMP-COLD-KEY" }]);

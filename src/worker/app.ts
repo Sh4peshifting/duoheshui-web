@@ -34,7 +34,7 @@ const updateDeviceSchema = z.object({
   coldKey: deviceKeySchema.nullable().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0);
 const commandSchema = z.object({ requestId: z.string().uuid() }).strict();
-const temporaryCommandSchema = commandSchema.extend({ kind: z.enum(["hot", "cold"]), deviceKey: deviceKeySchema }).strict();
+const temporaryCommandSchema = commandSchema.extend({ deviceKey: deviceKeySchema }).strict();
 const deviceIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,80}$/);
 
 async function parseBody<T>(request: Request, schema: z.ZodType<T>, maxBytes = 2_048): Promise<T> {
@@ -254,11 +254,11 @@ export function createApp(dependencies: AppDependencies = {}) {
     assertMutationRequest(c);
     const store = storeFor(c.env);
     const session = await authenticate(store, c.req.header("cookie"), now());
-    const { requestId, kind, deviceKey } = await parseBody(c.req.raw, temporaryCommandSchema, 4_096);
-    const reservation = await store.reserveCommand(session.sidHash, requestId, kind, now());
+    const { requestId, deviceKey } = await parseBody(c.req.raw, temporaryCommandSchema, 4_096);
+    const reservation = await store.reserveCommand(session.sidHash, requestId, "cold", now());
     if (reservation === "duplicate") throw new AppError(409, "DUPLICATE_REQUEST", "该指令已处理");
     if (reservation === "rate_limited") throw new AppError(429, "RATE_LIMITED", "操作过于频繁，请稍后再试");
-    await upstreamFor(c.env).startWater(kind, deviceKey, session.upstreamToken);
+    await upstreamFor(c.env).startWater("cold", deviceKey, session.upstreamToken);
     return c.json({ ok: true, data: { started: true } });
   });
 

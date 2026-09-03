@@ -79,5 +79,5 @@ export const api = {
   deleteDevice: (id: string) => request<{ deleted: true }>(`/api/devices/${id}`, { method: "DELETE" }),
   activateDevice: (id: string) => request<{ enabled: true }>(`/api/devices/${id}/activate`, { method: "POST", body: body({}) }),
   startWater: (kind: DeviceKind, requestId: string) => request<{ started: true }>(`/api/water/${kind}/start`, { method: "POST", body: body({ requestId }) }),
-  startTemporaryWater: (kind: DeviceKind, deviceKey: string, requestId: string) => request<{ started: true }>("/api/water/temporary/start", { method: "POST", body: body({ kind, deviceKey, requestId }) }),
+  startTemporaryWater: (deviceKey: string, requestId: string) => request<{ started: true }>("/api/water/temporary/start", { method: "POST", body: body({ deviceKey, requestId }) }),
 };

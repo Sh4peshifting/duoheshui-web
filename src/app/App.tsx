@@ -250,13 +250,11 @@ function HomePage({ account, activeDevice, onAccount, onNotice, onManageDevices 
         <button className="refresh-action" onClick={refresh} disabled={refreshing}><RefreshCw className={refreshing ? "spin" : ""} size={16} />{refreshing ? "刷新中" : "刷新余额"}</button>
       </section>
 
-      <section className="active-device-card">
-        <div><span className="section-kicker">当前设备</span><h2>{activeDevice?.label ?? "尚未选择设备"}</h2><p>{activeDevice ? "快捷按钮使用此设备的二维码" : "前往设备页添加或选择常用设备"}</p></div>
-        <button className="outline-action" onClick={onManageDevices}>{activeDevice ? "切换设备" : "添加设备"}<ChevronRight size={16} /></button>
-      </section>
-
       <section className="control-section" aria-labelledby="controls-title">
-        <div className="section-heading"><div><span className="section-kicker">快捷解锁</span><h2 id="controls-title">选择出水口</h2></div><small>点击即发送解锁指令</small></div>
+        <div className="control-heading">
+          <div><span className="section-kicker">当前设备</span><h2 id="controls-title">{activeDevice?.label ?? "尚未选择设备"}</h2></div>
+          <button className="outline-action" onClick={onManageDevices}>{activeDevice ? "切换设备" : "添加设备"}<ChevronRight size={16} /></button>
+        </div>
         <div className="control-grid">
           {(["hot", "cold"] as const).map((kind) => (
             <button key={kind} className={`water-control ${kind}`} onClick={() => startWater(kind)} disabled={starting !== null}>
@@ -298,7 +296,7 @@ function DevicesPage({ devices, onAdd, onEdit, onChanged, onNotice }: {
 
   return (
     <div className="devices-page">
-      <div className="page-heading"><div><span className="section-kicker">我的设备</span><h1>常用饮水机</h1><p>一台饮水机可以分别绑定热水口和冷水口二维码。</p></div><button className="add-action" onClick={onAdd}><Plus size={18} />添加设备</button></div>
+      <div className="page-heading"><div><span className="section-kicker">我的设备</span><h1>常用饮水机</h1></div><button className="add-action" onClick={onAdd} aria-label="添加设备"><Plus size={18} />添加设备</button></div>
       {devices.length === 0 ? (
         <section className="empty-state"><Smartphone size={36} /><h2>还没有保存设备</h2><p>添加常用饮水机后，即可从首页快速解锁。</p><button className="primary-action" onClick={onAdd}><Plus size={18} />添加第一台设备</button></section>
       ) : (
@@ -324,7 +322,6 @@ function OutletStatus({ kind, outlet }: { kind: DeviceKind; outlet: DeviceView[D
 }
 
 function TemporaryScanPage({ onNotice }: { onNotice: (notice: Notice) => void }) {
-  const [kind, setKind] = useState<DeviceKind>("cold");
   const [manualKey, setManualKey] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -332,7 +329,7 @@ function TemporaryScanPage({ onNotice }: { onNotice: (notice: Notice) => void })
     if (busy || !deviceKey.trim()) return;
     setBusy(true); onNotice(null);
     try {
-      await api.startTemporaryWater(kind, deviceKey.trim(), crypto.randomUUID());
+      await api.startTemporaryWater(deviceKey.trim(), crypto.randomUUID());
       setManualKey("");
       onNotice({ type: "success", text: "临时设备已解锁，请在饮水机上按键出水" });
     } catch (caught) {
@@ -344,12 +341,7 @@ function TemporaryScanPage({ onNotice }: { onNotice: (notice: Notice) => void })
     <div className="scan-page">
       <div className="page-heading"><div><span className="section-kicker">临时使用</span><h1>直接扫码解锁</h1><p>二维码只用于本次请求，不会保存到我的设备。</p></div></div>
       <section className="scan-card">
-        <div className="temperature-switch" role="group" aria-label="选择出水口">
-          <button className={kind === "hot" ? "active hot" : ""} aria-pressed={kind === "hot"} onClick={() => setKind("hot")}><Flame size={18} />热水口</button>
-          <button className={kind === "cold" ? "active cold" : ""} aria-pressed={kind === "cold"} onClick={() => setKind("cold")}><Snowflake size={18} />冷水口</button>
-        </div>
-        <QrScanner key={kind} onResult={unlock} disabled={busy} />
-        <p className="scan-hint">扫描成功后将直接发送{kind === "hot" ? "热水" : "冷水"}解锁指令，无需再次确认。</p>
+        <QrScanner onResult={unlock} disabled={busy} />
         <div className="or-divider"><span>或手工输入</span></div>
         <form className="device-form" onSubmit={(event) => { event.preventDefault(); void unlock(manualKey); }}>
           <label htmlFor="temporary-key">二维码原始内容</label>
@@ -388,7 +380,7 @@ function QrScanner({ onResult, disabled = false }: { onResult: (value: string) =
     }
   }
 
-  return <><div className={`scanner ${scanning ? "active" : ""}`}><video ref={videoRef} muted playsInline />{!scanning && <div><Camera size={32} /><strong>对准饮水机二维码</strong><small>画面仅在本机解码，不会上传</small></div>}</div><button type="button" className="scan-action" onClick={scanning ? stopScan : scan} disabled={disabled}><Camera size={18} />{scanning ? "停止扫描" : "打开相机扫描"}</button>{error && <p className="form-error" role="alert"><CircleAlert size={16} />{error}</p>}</>;
+  return <><div className={`scanner ${scanning ? "active" : ""}`}><video ref={videoRef} muted playsInline />{!scanning && <div><Camera size={32} /><strong>对准饮水机二维码</strong></div>}</div><button type="button" className="scan-action" onClick={scanning ? stopScan : scan} disabled={disabled}><Camera size={18} />{scanning ? "停止扫描" : "打开相机扫描"}</button>{error && <p className="form-error" role="alert"><CircleAlert size={16} />{error}</p>}</>;
 }
 
 function DeviceEditor({ current, onClose, onSaved }: { current: DeviceView | null; onClose: () => void; onSaved: (label: string) => Promise<void> }) {
