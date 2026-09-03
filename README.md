@@ -1,5 +1,6 @@
 # Duoheshui Web
 
+~~山大软件园宿舍更换了新的饮水机，由于新饮水机配套APP二维码识别不是很好用，每次扫码才解锁饮水机很麻烦，故基于前人逆向接口的分析，Vibe Coding了这个非官方的 Web 客户端用于一键解锁~~
 面向移动端的“小天同学”饮水机非官方 Web 客户端。React SPA 与 Hono API 运行在同一个 Cloudflare Worker 域名下，D1 保存加密后的会话与设备关联数据。
 
 > 本项目与“小天同学”及其官方服务无关联。只能用于本人账号及本人有权操作的饮水机。第三方接口变化可能导致功能失效。
@@ -81,7 +82,7 @@ pnpm build
 ## Cloudflare Dashboard + Git 部署
 
 1. 把仓库推送到 GitHub 或 GitLab。不要提交 `.dev.vars`。
-2. 在 Cloudflare Dashboard 的 **Storage & Databases → D1 SQL Database** 中创建数据库 `duoheshui`，复制 Database ID，把 `wrangler.jsonc` 中的全零占位 UUID 替换为真实 ID 后推送。
+2. 在 Cloudflare Dashboard 的 **Storage & Databases → D1 SQL Database** 中创建数据库 `duoheshui`，复制 Database ID，把 `wrangler.jsonc` 中的占位 UUID 替换为真实 ID 后推送。
 3. 将 `wrangler.jsonc` 中 `ratelimits[0].namespace_id` 改成当前 Cloudflare 账号内未使用的正整数标识。
 4. 在 **Workers & Pages → Create application → Start with Hello World** 创建一个名称严格为 `duoheshui-web` 的 Worker。
 5. 打开该 Worker 的 **Settings → Bindings → Add binding → D1 database**，变量名填写 `DB`，选择刚创建的 `duoheshui`。
@@ -167,6 +168,7 @@ GET    /api/health
 
 所有修改状态的 API 要求同源 `Origin` 以及 `X-Duoheshui-Client: web`。响应统一为 `{ ok: true, data }` 或 `{ ok: false, error }`。
 
-## 复用边界
+## 致谢
 
-本实现根据已观察到的协议行为 clean-room 编写 TypeScript，没有复制原 Android App 的 UI、资源、图标或大段 Kotlin 源码。没有实现未经现有调用链证实的第二阶段 start API、服务器设备绑定、公共设备发现、批量控制或定时出水。
+感谢 [Duoheshui](https://github.com/aixiao0621/Duoheshui) 和 [ShanRuanDrinkWater](https://github.com/Leenkee/ShanRuanDrinkWater) 项目提供的小天同学协议分析和接口逆向。
+
